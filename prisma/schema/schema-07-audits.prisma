@@ -1,0 +1,203 @@
+/// Administrative actions executed by platform administrators for policy
+/// enforcement. Each record is an immutable, append-only snapshot of an
+/// action taken against a target resource. Common targets include
+/// communities, posts, and comments. The actor is the admin user who
+/// performed the action. This table enables audit and compliance reviews and
+/// incident investigations.
+///
+/// Key relationships:
+/// - Actor admin user via {@link community_platform_users}
+/// - Optional target community via {@link community_platform_communities}
+/// - Optional target post via {@link community_platform_posts}
+/// - Optional target comment via {@link community_platform_comments}
+///
+/// Behavioral notes:
+/// - Records are append-only to preserve audit integrity (snapshot stance).
+/// - "action" stores the canonical action key (e.g., "disable_community",
+/// "delete_post", "remove_comment").
+/// - Free-text "reason" may contain policy references or case notes.
+/// - onDelete configured to preserve audit records (Restrict/SetNull as
+/// appropriate).
+///
+/// @namespace Audits
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_admin_actions {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Administrator who performed the action. Target model's {@link
+  /// community_platform_users.id}
+  actor_user_id String
+  
+  /// Target community for the action, if applicable. Target model's {@link
+  /// community_platform_communities.id}
+  target_community_id String?
+  
+  /// Target post for the action, if applicable. Target model's {@link
+  /// community_platform_posts.id}
+  target_post_id String?
+  
+  /// Target comment for the action, if applicable. Target model's {@link
+  /// community_platform_comments.id}
+  target_comment_id String?
+  
+  /// Canonical action identifier describing what was performed (e.g.,
+  /// "disable_community", "delete_post", "remove_comment"). Used for policy
+  /// analytics and classification.
+  action String
+  
+  /// Free-text reason, including policy references or moderator notes
+  /// explaining the action context.
+  reason String?
+  
+  /// IP address observed for the actor’s session at action time, recorded for
+  /// security/audit review.
+  ip String?
+  
+  /// User agent string observed for the actor’s session, aiding forensic
+  /// analysis.
+  user_agent String?
+  
+  /// Creation timestamp when the admin action snapshot was recorded.
+  created_at DateTime
+  
+  /// Last update timestamp for this record (typically same as creation;
+  /// retained for consistency).
+  updated_at DateTime
+  
+  /// Soft deletion timestamp when the entry was logically removed from active
+  /// views (retained for audit retention windows).
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  actorUser community_platform_users @relation(fields: [actor_user_id], references: [id], onDelete: Cascade)
+  targetCommunity community_platform_communities? @relation(fields: [target_community_id], references: [id], onDelete: Cascade)
+  targetPost community_platform_posts? @relation(fields: [target_post_id], references: [id], onDelete: Cascade)
+  targetComment community_platform_comments? @relation(fields: [target_comment_id], references: [id], onDelete: Cascade)
+  
+  @@index([actor_user_id, created_at])
+  @@index([target_community_id, created_at], map: "community_platform_admin_actions_target_community_id_c_4785aaaa")
+  @@index([target_post_id, created_at])
+  @@index([target_comment_id, created_at], map: "community_platform_admin_actions_target_comment_id_cre_55da91e2")
+  @@index([action, created_at])
+  @@index([created_at])
+}
+
+/// General-purpose audit trail capturing significant user and system events
+/// for observability and compliance. Events include joins/leaves, votes,
+/// content creation/deletion, authentication-related activities, and other
+/// domain actions. Designed as an append-only snapshot log to support
+/// investigations, analytics, and anomaly detection.
+///
+/// Key relationships:
+/// - Actor user (optional) via {@link community_platform_users} for
+/// authenticated events
+/// - Session (optional) via {@link community_platform_sessions} for correlation
+/// - Guest visitor (optional) via {@link community_platform_guestvisitors}
+/// for unauthenticated events
+/// - Optional resource targets via {@link community_platform_communities},
+/// {@link community_platform_posts}, {@link community_platform_comments},
+/// {@link community_platform_community_memberships}
+///
+/// Behavioral notes:
+/// - Append-only historical records (snapshot stance) with outcome flag
+/// (success) and optional details for context.
+/// - Polymorphic targeting is realized via nullable FKs to specific resource
+/// tables (only one is typically populated per record).
+/// - onDelete configured to SetNull for all optional foreign keys to
+/// preserve the audit log when targets are deleted.
+///
+/// @namespace Audits
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_audit_logs {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Authenticated actor who triggered the event, if any. Target model's
+  /// {@link community_platform_users.id}
+  actor_user_id String?
+  
+  /// Correlated application session for the event, if tracked. Target model's
+  /// {@link community_platform_sessions.id}
+  session_id String?
+  
+  /// Guest visitor identity for unauthenticated events, if tracked. Target
+  /// model's {@link community_platform_guestvisitors.id}
+  guestvisitor_id String?
+  
+  /// Related community for the event, if applicable. Target model's {@link
+  /// community_platform_communities.id}
+  community_id String?
+  
+  /// Related post for the event, if applicable. Target model's {@link
+  /// community_platform_posts.id}
+  post_id String?
+  
+  /// Related comment for the event, if applicable. Target model's {@link
+  /// community_platform_comments.id}
+  comment_id String?
+  
+  /// Related membership for join/leave or membership-related events, if
+  /// applicable. Target model's {@link
+  /// community_platform_community_memberships.id}
+  membership_id String?
+  
+  /// Canonical event type key (e.g., "join_community", "leave_community",
+  /// "post_created", "comment_deleted", "vote_toggled", "login", "logout").
+  event_type String
+  
+  /// Whether the attempted event resulted in a successful outcome (true) or
+  /// failed (false).
+  success Boolean
+  
+  /// Optional free-text details to provide context (e.g., validation errors,
+  /// policy notes, or server messages).
+  details String?
+  
+  /// IP address observed for the actor’s session or request, for security and
+  /// forensic purposes.
+  ip String?
+  
+  /// User agent string observed for the client at event time, aiding analysis.
+  user_agent String?
+  
+  /// Creation timestamp when the audit log entry was recorded.
+  created_at DateTime
+  
+  /// Last update timestamp for this record (typically same as creation;
+  /// retained for consistency).
+  updated_at DateTime
+  
+  /// Soft deletion timestamp when the entry was logically removed from active
+  /// views (retained for audit retention windows).
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  actorUser community_platform_users? @relation(fields: [actor_user_id], references: [id], onDelete: Cascade)
+  session community_platform_sessions? @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  guestVisitor community_platform_guestvisitors? @relation(fields: [guestvisitor_id], references: [id], onDelete: Cascade)
+  community community_platform_communities? @relation(fields: [community_id], references: [id], onDelete: Cascade)
+  post community_platform_posts? @relation(fields: [post_id], references: [id], onDelete: Cascade)
+  comment community_platform_comments? @relation(fields: [comment_id], references: [id], onDelete: Cascade)
+  membership community_platform_community_memberships? @relation(fields: [membership_id], references: [id], onDelete: Cascade)
+  
+  @@index([guestvisitor_id])
+  @@index([actor_user_id, created_at])
+  @@index([session_id, created_at])
+  @@index([community_id, created_at])
+  @@index([post_id, created_at])
+  @@index([comment_id, created_at])
+  @@index([membership_id, created_at])
+  @@index([event_type, created_at])
+  @@index([created_at])
+}

@@ -1,0 +1,34 @@
+// File path: src/decorators/SystemadminAuth.ts
+import { SwaggerCustomizer } from "@nestia/core";
+import { ExecutionContext, createParamDecorator } from "@nestjs/common";
+import { Singleton } from "tstl";
+
+import { systemadminAuthorize } from "../providers/authorize/systemadminAuthorize";
+
+/**
+ * System admin authentication decorator.
+ * Usage: someMethod(@SystemadminAuth() admin: SystemadminPayload) { ... }
+ */
+export const SystemadminAuth =
+  (): ParameterDecorator =>
+  (
+    target: object,
+    propertyKey: string | symbol | undefined,
+    parameterIndex: number,
+  ): void => {
+    // Add Bearer auth requirement to Swagger route
+    SwaggerCustomizer((props) => {
+      props.route.security ??= [];
+      props.route.security.push({ bearer: [] });
+    })(target, propertyKey as string, undefined!);
+
+    // Register singleton parameter decorator instance
+    singleton.get()(target, propertyKey, parameterIndex);
+  };
+
+const singleton = new Singleton(() =>
+  createParamDecorator(async (_data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return systemadminAuthorize(request);
+  })(),
+);

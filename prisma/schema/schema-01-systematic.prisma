@@ -1,0 +1,152 @@
+/// Canonical list of community categories used for Explore and filtering
+/// across the platform. Managed by administrators and referenced by {@link
+/// community_platform_communities} in other components. Contains business
+/// key (code), human-readable name, and ordering/visibility controls.
+/// Downstream entities should reference this table by ID or business code;
+/// this table itself does not depend on business entities.
+///
+/// @namespace Systematic
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_categories {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Unique business identifier (slug-like) for the category. Used in URLs,
+  /// filters, and as a stable reference in configurations.
+  code String
+  
+  /// Human-readable category name displayed to users in listings and filters.
+  /// Must be unique to avoid ambiguous display labels across the platform.
+  name String
+  
+  /// Optional detailed description of the category for admin/reference
+  /// purposes.
+  description String?
+  
+  /// Ordering hint for UI presentation. Lower values appear earlier.
+  display_order Int
+  
+  /// Whether this category is currently enabled for selection and display.
+  active Boolean
+  
+  /// Creation timestamp.
+  created_at DateTime
+  
+  /// Last update timestamp.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp. Null when not deleted.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  community_platform_communities community_platform_communities[]
+  
+  @@unique([code])
+  @@unique([name])
+  @@index([active, display_order])
+  @@index([created_at])
+}
+
+/// Administrative list of reserved terms used to validate and block specific
+/// names or identifiers (e.g., community names, system-reserved words). Each
+/// record captures the term and its normalized variant for case-insensitive
+/// uniqueness within a specific application context (applies_to). No
+/// external dependencies; consumed by validation logic in other components.
+///
+/// @namespace Systematic
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_reserved_terms {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Original reserved term as entered by an administrator. Used for display
+  /// and reference.
+  term String
+  
+  /// Normalization of the term (e.g., lowercased) for case-insensitive
+  /// matching. Application logic is responsible for maintaining this value.
+  term_normalized String
+  
+  /// Target context to which this reservation applies (e.g., 'community_name',
+  /// 'global').
+  applies_to String
+  
+  /// Optional administrative note explaining why the term is reserved.
+  reason String?
+  
+  /// Whether the reservation is currently enforced.
+  active Boolean
+  
+  /// Creation timestamp.
+  created_at DateTime
+  
+  /// Last update timestamp.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp. Null when not deleted.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  @@unique([applies_to, term_normalized], map: "community_platform_reserved_terms_applies_to_term_norm_783570ee")
+  @@index([active, applies_to])
+  @@index([created_at])
+}
+
+/// Key-value application configuration entries controlling platform behavior
+/// (e.g., feature flags, policy values). Designed for administrator
+/// management with descriptive metadata. Does not depend on business
+/// entities; other domains read from this store.
+///
+/// @namespace Systematic
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_app_settings {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Unique configuration key name. Used to retrieve the setting
+  /// programmatically.
+  key String
+  
+  /// Stored value for this setting as string. Application layer handles
+  /// parsing to the appropriate type.
+  value String
+  
+  /// Semantic type of the value (e.g., 'string', 'int', 'boolean',
+  /// 'duration'). Used for validation and UI hints.
+  value_type String
+  
+  /// Optional explanation of the setting’s purpose and expected format.
+  description String?
+  
+  /// Whether this setting is currently effective. Allows temporarily disabling
+  /// values without deletion.
+  active Boolean
+  
+  /// Creation timestamp.
+  created_at DateTime
+  
+  /// Last update timestamp.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp. Null when not deleted.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  @@unique([key])
+  @@index([active, created_at])
+}

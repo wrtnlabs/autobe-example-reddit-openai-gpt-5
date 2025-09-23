@@ -1,0 +1,157 @@
+/// User-authored comment entities for discussion threads. Each comment
+/// belongs to a post and may optionally reply to another comment (nested
+/// threading via self-reference). Authors can edit/delete their own
+/// comments; audit history is captured in {@link
+/// community_platform_comment_snapshots}. Votes on comments are stored in
+/// {@link community_platform_comment_votes}. Parent relation uses ON DELETE
+/// SET NULL to avoid unintended cascade deletions when hard-deleting a
+/// parent; soft deletion is the default behavior via deleted_at.
+///
+/// @namespace Comments
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_comments {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Target post’s {@link community_platform_posts.id}. Required association
+  /// that determines the comment’s container post.
+  community_platform_post_id String
+  
+  /// Author user’s {@link community_platform_users.id}. Identifies who created
+  /// the comment.
+  community_platform_user_id String
+  
+  /// Optional parent comment’s {@link community_platform_comments.id} for
+  /// nested reply threading. Uses ON DELETE SET NULL to preserve child
+  /// comments when a parent is hard-deleted.
+  parent_id String?
+  
+  /// Plain-text comment body. Business constraints: 2–2,000 characters; no
+  /// executable code. Stored as raw text for search and display.
+  content String
+  
+  /// Creation timestamp of the comment (UTC).
+  created_at DateTime
+  
+  /// Last update timestamp of the comment (UTC). Updated when content changes.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp (UTC). Null when the comment is active; non-null
+  /// indicates removal from public view.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  post community_platform_posts @relation(fields: [community_platform_post_id], references: [id], onDelete: Cascade)
+  author community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  parent community_platform_comments? @relation("recursive", fields: [parent_id], references: [id], onDelete: Cascade)
+  
+  recursive community_platform_comments[] @relation("recursive")
+  community_platform_comment_votes community_platform_comment_votes[]
+  community_platform_comment_snapshots community_platform_comment_snapshots[]
+  community_platform_admin_actions community_platform_admin_actions[]
+  community_platform_audit_logs community_platform_audit_logs[]
+  
+  @@index([community_platform_post_id, created_at], map: "community_platform_comments_community_platform_post_id_520bb25f")
+  @@index([community_platform_user_id, created_at], map: "community_platform_comments_community_platform_user_id_d682cb89")
+  @@index([parent_id, created_at])
+  @@index([community_platform_post_id, parent_id, created_at], map: "community_platform_comments_community_platform_post_id_292b46ad")
+}
+
+/// Per-user voting state for comments. Each record represents a single
+/// user’s current vote on a specific comment, enforcing one vote per
+/// (comment, user). States are stored as raw strings (e.g., "Upvote" or
+/// "Downvote"). Absence of a record represents the "None" state. Used to
+/// compute scores (upvotes − downvotes).
+///
+/// @namespace Comments
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_comment_votes {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Target comment’s {@link community_platform_comments.id}.
+  community_platform_comment_id String
+  
+  /// Voter user’s {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Voting state value. Expected values enforced in application logic:
+  /// "Upvote" or "Downvote". The "None" state is represented by absence of a
+  /// record.
+  state String
+  
+  /// Creation timestamp of this vote record (UTC).
+  created_at DateTime
+  
+  /// Last update timestamp of this vote record (UTC). Changes when vote state
+  /// toggles.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp (UTC). Null for active votes; non-null if
+  /// logically removed.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  comment community_platform_comments @relation(fields: [community_platform_comment_id], references: [id], onDelete: Cascade)
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_comment_id, community_platform_user_id], map: "community_platform_comment_votes_community_platform_co_34b24ea4")
+  @@index([community_platform_user_id, created_at], map: "community_platform_comment_votes_community_platform_us_f33e6829")
+  @@index([community_platform_comment_id, created_at], map: "community_platform_comment_votes_community_platform_co_68a9b5f7")
+  @@index([community_platform_comment_id, state], map: "community_platform_comment_votes_community_platform_co_587616d7")
+}
+
+/// Historical point-in-time records capturing the content state of {@link
+/// community_platform_comments}. Created whenever content changes to
+/// preserve audit trails and enable version history review. Append-only
+/// usage is typical.
+///
+/// @namespace Comments
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_comment_snapshots {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// The source comment’s {@link community_platform_comments.id} whose state
+  /// is captured by this snapshot.
+  community_platform_comment_id String
+  
+  /// Point-in-time plain-text content of the comment as captured by this
+  /// snapshot.
+  content String
+  
+  /// Parent comment identifier captured at snapshot time (if any). Stored for
+  /// historical accuracy without enforcing referential updates.
+  parent_id String?
+  
+  /// Snapshot creation timestamp (UTC).
+  created_at DateTime
+  
+  /// Administrative timestamp for this snapshot record (UTC). Typically equal
+  /// to created_at as snapshots are append-only.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp if the snapshot record is ever logically removed
+  /// (rare). Null in normal operation.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  comment community_platform_comments @relation(fields: [community_platform_comment_id], references: [id], onDelete: Cascade)
+  
+  @@index([community_platform_comment_id, created_at], map: "community_platform_comment_snapshots_community_platfor_a4c0672a")
+}

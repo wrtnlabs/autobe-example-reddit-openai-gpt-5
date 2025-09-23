@@ -1,0 +1,10 @@
+export * as categories from "./categories/index";
+export * as reservedTerms from "./reservedTerms/index";
+export * as systemAdmin from "./systemAdmin/index";
+export * as communities from "./communities/index";
+export * as communityMember from "./communityMember/index";
+export * as posts from "./posts/index";
+export * as comments from "./comments/index";
+export * as users from "./users/index";
+export * as globalLatestPosts from "./globalLatestPosts/index";
+export * as search from "./search/index";

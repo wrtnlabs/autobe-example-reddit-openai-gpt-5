@@ -1,0 +1,64 @@
+/// Materialized view that caches the sitewide 10 most recent posts for the
+/// Global Latest sidebar. It denormalizes display-critical fields for fast
+/// read access and applies business tie-breakers primarily by creation time.
+/// Records reference the authoritative {@link community_platform_posts},
+/// their owning {@link community_platform_communities}, and the author
+/// {@link community_platform_users}. Data is refreshed by background jobs;
+/// users do not write to this table directly.
+///
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model mv_community_platform_global_latest_posts {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Referenced post's {@link community_platform_posts.id}. One row per post
+  /// within this MV.
+  community_platform_post_id String
+  
+  /// Owning community's {@link community_platform_communities.id}.
+  community_platform_community_id String
+  
+  /// Author user's {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Original post creation timestamp used for recency ordering (Newest).
+  created_at DateTime
+  
+  /// Timestamp when this MV row was last refreshed/materialized.
+  refreshed_at DateTime
+  
+  /// Denormalized post title for display on the Global Latest card.
+  title String
+  
+  /// Denormalized author display name for presentation; may be empty or null
+  /// if not provided by the author at post time.
+  author_display_name String?
+  
+  /// Denormalized community unique name (immutable identifier) used for
+  /// display such as /c/{name}.
+  community_name String
+  
+  /// Denormalized score (upvotes − downvotes) at refresh time for the
+  /// referenced post.
+  score Int
+  
+  /// Denormalized total number of comments at refresh time for the referenced
+  /// post.
+  comment_count Int
+  
+  //----
+  // RELATIONS
+  //----
+  post community_platform_posts @relation(fields: [community_platform_post_id], references: [id], onDelete: Cascade)
+  community community_platform_communities @relation(fields: [community_platform_community_id], references: [id], onDelete: Cascade)
+  author community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@index([community_platform_user_id], map: "mv_community_platform_global_latest_posts_community_pl_6981d9d4")
+  
+  @@unique([community_platform_post_id], map: "mv_community_platform_global_latest_posts_community_pl_a376ceae")
+  @@index([created_at, community_platform_post_id], map: "mv_community_platform_global_latest_posts_created_at_c_2c7d259c")
+  @@index([community_platform_community_id, created_at], map: "mv_community_platform_global_latest_posts_community_pl_8e78c2e4")
+}
