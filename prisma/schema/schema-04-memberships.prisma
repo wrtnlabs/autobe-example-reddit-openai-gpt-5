@@ -1,0 +1,93 @@
+/// Membership link between a {@link community_platform_users} account and a
+/// {@link community_platform_communities} sub-community. Represents whether
+/// a user has joined a community to personalize the Home feed and enable
+/// join/leave toggles. Rows are typically created on Join and removed on
+/// Leave; deleted_at can be used if soft-delete is preferred. Supports
+/// deterministic sorting and quick filtering by user or community.
+///
+/// @namespace Memberships
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_community_members {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Joined account’s {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Target sub-community’s {@link community_platform_communities.id}.
+  community_platform_community_id String
+  
+  /// Timestamp when the membership was created (Join time). Used for relative
+  /// time displays and ordering.
+  created_at DateTime
+  
+  /// Timestamp when the membership record was last updated (e.g.,
+  /// reconciliation or metadata touch).
+  updated_at DateTime
+  
+  /// Optional soft-deletion timestamp. When set, indicates a logically removed
+  /// membership while preserving audit trails.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  community community_platform_communities @relation(fields: [community_platform_community_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_user_id, community_platform_community_id], map: "community_platform_community_members_community_platfor_12a4e033")
+  @@index([community_platform_user_id, created_at], map: "community_platform_community_members_community_platfor_88dc7b81")
+  @@index([community_platform_community_id, created_at], map: "community_platform_community_members_community_platfor_bef29542")
+  @@index([community_platform_community_id, deleted_at], map: "community_platform_community_members_community_platfor_c05a9422")
+}
+
+/// Per-user recent communities list used to render the Left Sidebar “Recent
+/// Communities”. Tracks the most recent activity timestamp per ({@link
+/// community_platform_users}, {@link community_platform_communities}) pair
+/// for fast retrieval of up to 5 items ordered by last_activity_at.
+/// Maintained by application signals on visit, join/leave, post, comment, or
+/// vote within the community.
+///
+/// @namespace Memberships
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_recent_communities {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Owner user’s {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Referenced community’s {@link community_platform_communities.id}.
+  community_platform_community_id String
+  
+  /// Most recent activity time (visit, join/leave, post, comment, or vote) for
+  /// this user in this community. Drives ordering and capping to top 5 in UI.
+  last_activity_at DateTime
+  
+  /// Creation timestamp for this recency record.
+  created_at DateTime
+  
+  /// Last update timestamp when activity is recorded or reconciled.
+  updated_at DateTime
+  
+  /// Optional soft-deletion timestamp to hide the record while preserving its
+  /// history.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  community community_platform_communities @relation(fields: [community_platform_community_id], references: [id], onDelete: Cascade)
+  
+  @@index([community_platform_community_id], map: "community_platform_recent_communities_community_platfo_8cc3b9b6")
+  
+  @@unique([community_platform_user_id, community_platform_community_id], map: "community_platform_recent_communities_community_platfo_b402534c")
+  @@index([community_platform_user_id, last_activity_at], map: "community_platform_recent_communities_community_platfo_c2f01753")
+}

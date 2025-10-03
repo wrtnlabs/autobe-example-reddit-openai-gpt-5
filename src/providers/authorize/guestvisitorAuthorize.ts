@@ -2,35 +2,38 @@
 import { ForbiddenException } from "@nestjs/common";
 
 import { MyGlobal } from "../../MyGlobal";
-import { jwtAuthorize } from "./jwtAuthorize"; // CORRECT: same directory import
+import { jwtAuthorize } from "./jwtAuthorize"; // MUST be same directory import
 import { GuestvisitorPayload } from "../../decorators/payload/GuestvisitorPayload";
 
 /**
- * Authorize Guest Visitor role.
- * - Verifies JWT using shared jwtAuthorize
- * - Ensures the payload.type is "guestVisitor"
- * - Confirms the guest visitor exists and is not soft-deleted
+ * Authenticate and authorize a guestvisitor role.
+ *
+ * - payload.id is ALWAYS the top-level user table ID (community_platform_users.id)
+ * - Role table extends user via community_platform_user_id
  */
 export async function guestvisitorAuthorize(request: {
   headers: { authorization?: string };
 }): Promise<GuestvisitorPayload> {
-  // Parse & verify token
   const payload: GuestvisitorPayload = jwtAuthorize({ request }) as GuestvisitorPayload;
 
-  // Role discriminator check
-  if (payload.type !== "guestVisitor")
-    throw new ForbiddenException("You're not guestVisitor");
+  if (payload.type !== "guestvisitor")
+    throw new ForbiddenException("You're not guestvisitor");
 
-  // Standalone role table → query by primary key `id`
-  const guest = await MyGlobal.prisma.community_platform_guestvisitors.findFirst({
+  const now = new Date();
+
+  const record = await MyGlobal.prisma.community_platform_guestvisitors.findFirst({
     where: {
-      id: payload.id,
+      community_platform_user_id: payload.id,
+      restriction_type: "read_only",
+      revoked_at: null,
       deleted_at: null,
+      OR: [{ restricted_until: null }, { restricted_until: { gt: now } }],
+      user: { is: { deleted_at: null } },
     },
   });
 
-  if (guest === null)
+  if (record === null)
     throw new ForbiddenException("You're not enrolled");
 
-  return payload; // inject the JWT payload as-is
+  return payload;
 }

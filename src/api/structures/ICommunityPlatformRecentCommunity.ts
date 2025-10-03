@@ -1,80 +1,72 @@
 import { tags } from "typia";
 
-import { IECommunityPlatformRecentCommunityOrderBy } from "./IECommunityPlatformRecentCommunityOrderBy";
-import { IESortDirection } from "./IESortDirection";
-import { ICommunityPlatformCommunity } from "./ICommunityPlatformCommunity";
+import { IECommunityCategory } from "./IECommunityCategory";
 
 export namespace ICommunityPlatformRecentCommunity {
   /**
-   * Request parameters for listing a user’s recent communities from Prisma
-   * table community_platform_recent_communities.
+   * Container for the Left Sidebar "Recent Communities" module.
    *
-   * Includes pagination, sorting (by last_activity_at/created_at/updated_at),
-   * and optional date range filters. Actor identity is derived from
-   * authentication context; user IDs are not accepted in this request body.
+   * Represents the caller’s five most recently active communities. The
+   * dataset is capped at five items by business rule and reinforced here by
+   * maxItems validation. Uses
+   * Memberships.community_platform_recent_communities as the source with
+   * ordering by last_activity_at (desc).
    */
-  export type IRequest = {
-    /** Page number for pagination (>= 1). */
-    page?: (number & tags.Type<"int32"> & tags.Minimum<1>) | null | undefined;
-
-    /** Maximum number of records per page (>= 1). */
-    limit?: (number & tags.Type<"int32"> & tags.Minimum<1>) | null | undefined;
-
-    /** Primary sort field; defaults to last_activity_at when unspecified. */
-    orderBy?: IECommunityPlatformRecentCommunityOrderBy | null | undefined;
-
-    /** Sort direction for the selected orderBy; defaults to desc. */
-    direction?: IESortDirection | null | undefined;
-
+  export type IList = {
     /**
-     * Filter: include records with last_activity_at on/after this timestamp
-     * (UTC, ISO 8601).
+     * Up to five most recent communities for the authenticated user,
+     * ordered by lastActivityAt descending.
+     *
+     * Backed by Memberships.community_platform_recent_communities
+     * (last_activity_at) with joins to
+     * Communities.community_platform_communities for display fields. Rows
+     * where deleted_at is set on either table are excluded.
      */
-    from?: (string & tags.Format<"date-time">) | null | undefined;
-
-    /**
-     * Filter: include records with last_activity_at on/before this
-     * timestamp (UTC, ISO 8601).
-     */
-    to?: (string & tags.Format<"date-time">) | null | undefined;
+    data: ICommunityPlatformRecentCommunity.ISummary[] & tags.MaxItems<5>;
   };
 
   /**
-   * Summary of a user's recent community record.
+   * Summary card for a recent community list item.
    *
-   * Based on Prisma model community_platform_recent_communities. Enriched
-   * with the referenced community summary for presentation while keeping the
-   * mapping identity for deduplication and reconciliation.
-   *
-   * Security: Contains no sensitive credentials or session data.
+   * Composed primarily from Communities.community_platform_communities (name,
+   * logo_uri, category) and Memberships.community_platform_recent_communities
+   * (last_activity_at). Excludes soft-deleted records.
    */
   export type ISummary = {
     /**
-     * Primary key of the recent-community mapping.
+     * Immutable community name used in URLs and display (Prisma:
+     * community_platform_communities.name).
      *
-     * Maps to Prisma column community_platform_recent_communities.id
-     * (UUID).
+     * Naming policy (business rules): alphanumeric with optional
+     * hyphen/underscore separators, 3–30 chars, begins/ends alphanumeric,
+     * and avoid consecutive separators. Uniqueness is enforced
+     * case-insensitively via name_key at the database layer.
      */
-    id: string & tags.Format<"uuid">;
+    name: string &
+      tags.MinLength<3> &
+      tags.MaxLength<30> &
+      tags.Pattern<"^[A-Za-z0-9](?:[A-Za-z0-9_-]{1,28}[A-Za-z0-9])?$">;
 
     /**
-     * Timestamp of the most recent eligible activity between the user and
-     * the community (UTC).
-     *
-     * Maps to Prisma column
-     * community_platform_recent_communities.last_activity_at (timestamptz).
-     * Drives list ordering.
+     * Optional logo image URI for the community (Prisma:
+     * community_platform_communities.logo_uri). When null or absent,
+     * clients show a default icon.
      */
-    last_activity_at: string & tags.Format<"date-time">;
+    logoUrl?: (string & tags.Format<"uri">) | null | undefined;
 
     /**
-     * Nested summary of the related community for quick rendering in
-     * sidebars and menus.
-     *
-     * Resolved from
-     * community_platform_recent_communities.community_platform_community_id
-     * → community_platform_communities.
+     * Most recent activity time for this user in this community (Prisma:
+     * community_platform_recent_communities.last_activity_at). Used to
+     * order the recent list descending.
      */
-    community: ICommunityPlatformCommunity.ISummary;
+    lastActivityAt: string & tags.Format<"date-time">;
+
+    /**
+     * Community category value (Prisma:
+     * community_platform_communities.category). Optional in this summary
+     * but typically present. Enum values are defined in
+     * IECommunityCategory.
+     */
+    category?: IECommunityCategory | null | undefined;
   };
 }

@@ -1,113 +1,157 @@
-import jwt from "jsonwebtoken";
-import { MyGlobal } from "../MyGlobal";
-import typia, { tags } from "typia";
-import { Prisma } from "@prisma/client";
-import { v4 } from "uuid";
-import { toISOStringSafe } from "../util/toISOStringSafe";
 import { HttpException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import typia, { tags } from "typia";
+import { v4 } from "uuid";
+import { MyGlobal } from "../MyGlobal";
+import { PasswordUtil } from "../utils/passwordUtil";
+import { toISOStringSafe } from "../utils/toISOStringSafe";
+
 import { ICommunityPlatformCommunity } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformCommunity";
+import { IECommunityCategory } from "@ORGANIZATION/PROJECT-api/lib/structures/IECommunityCategory";
+import { IECommunitySort } from "@ORGANIZATION/PROJECT-api/lib/structures/IECommunitySort";
 import { IPageICommunityPlatformCommunity } from "@ORGANIZATION/PROJECT-api/lib/structures/IPageICommunityPlatformCommunity";
+import { IPage } from "@ORGANIZATION/PROJECT-api/lib/structures/IPage";
 
 /**
- * Search communities by name with pagination and sorting
- * (community_platform_communities).
+ * Search communities (community_platform_communities) with Name Match or
+ * Recently Created sorting
  *
- * This endpoint searches community_platform_communities with optional query and
- * category filters. It excludes soft-deleted rows (deleted_at != null). By
- * default, it also excludes administratively disabled communities (disabled_at
- * != null) unless include_disabled is true.
+ * Provides global community search with Name Match ranking or Recently Created
+ * ordering. Excludes soft-deleted communities (deleted_at IS NOT NULL).
+ * Supports optional category filtering, limit (default 20, max 100), and
+ * deterministic ordering.
  *
- * Ranking and sorting:
+ * NameMatch ranking (application-level): exact (case-insensitive) > starts-with
  *
- * - Default (when sort_by not specified and query provided): Name Match ranking
- *   performed in application: exact (name === query) → startsWith(query) → name
- *   contains(query) → description contains(query), with tie-breakers created_at
- *   desc then id desc.
- * - Explicit sorting: sort_by in {"created_at", "last_active_at", "name"} with
- *   sort_dir {"asc", "desc"}.
+ * > Contains, tying by (created_at desc, id desc).
  *
- * Pagination is 1-based; defaults: page=1, limit=20.
+ * Pagination note: API response does not expose cursor; pagination info is
+ * provided via IPage.IPagination. `current` is 0 for the current page in this
+ * implementation.
  *
  * @param props - Request properties
- * @param props.body - Search parameters and pagination
- * @returns Paginated community summaries suitable for exploration
- * @throws {HttpException} 400 when query is provided but shorter than 2
- *   characters
+ * @param props.body - Search parameters (q?, category?, sort?, cursor?, limit?)
+ * @returns Paginated list of community summaries with derived memberCount
+ * @throws {HttpException} 400 When q is provided but shorter than 2 characters
+ *   after trim
+ * @throws {HttpException} 500 On unexpected database errors
  */
-export async function patchcommunityPlatformSearchCommunities(props: {
+export async function patchCommunityPlatformSearchCommunities(props: {
   body: ICommunityPlatformCommunity.IRequest;
 }): Promise<IPageICommunityPlatformCommunity.ISummary> {
   const { body } = props;
 
-  // Pagination defaults
-  const page = Number(body.page ?? 1);
-  const limit = Number(body.limit ?? 20);
-  const skip = (page - 1) * limit;
-
-  // Validate query length when provided
-  const query = body.query ?? null;
-  if (query !== null && query.length < 2) {
-    throw new HttpException(
-      "Bad Request: query must be at least 2 characters",
-      400,
-    );
+  // Normalize and validate inputs
+  const rawQ = body.q?.trim();
+  if (rawQ !== undefined && rawQ.length > 0 && rawQ.length < 2) {
+    throw new HttpException("Please enter at least 2 characters.", 400);
   }
+  const q = rawQ && rawQ.length >= 2 ? rawQ : undefined;
 
-  // Common where condition
+  const sort = body.sort;
+  const useRecentlyCreated =
+    sort === "recentlyCreated" || sort === "RecentlyCreated";
+  // Default for name-based search when not specified
+  const useNameMatch = !useRecentlyCreated;
+
+  // Clamp limit to [1, 100], default 20
+  const limit = (() => {
+    const base = body.limit !== undefined ? Number(body.limit) : 20;
+    if (Number.isNaN(base)) return 20;
+    if (base < 1) return 1;
+    if (base > 100) return 100;
+    return base;
+  })();
+
+  // Build shared where condition (allowed pattern)
   const whereCondition = {
     deleted_at: null,
-    ...(body.include_disabled === true ? {} : { disabled_at: null }),
-    ...(body.community_platform_category_id !== undefined &&
-      body.community_platform_category_id !== null && {
-        community_platform_category_id: body.community_platform_category_id,
+    ...(body.category !== undefined &&
+      body.category !== null && {
+        category: body.category,
       }),
-    ...(body.category_code !== undefined &&
-      body.category_code !== null && {
-        category: { code: body.category_code },
-      }),
-    ...(query !== null && {
-      OR: [{ name: { contains: query } }, { description: { contains: query } }],
-    }),
+    ...(q !== undefined && q !== null
+      ? {
+          OR: [{ name: { contains: q } }, { description: { contains: q } }],
+        }
+      : {}),
   };
 
-  // Helper to map DB rows to API summaries (convert dates, handle optional logo)
-  const mapToSummary = (row: {
-    id: string;
-    name: string;
-    community_platform_category_id: string;
-    logo: string | null;
-    created_at: Date | (string & tags.Format<"date-time">);
-    last_active_at: Date | (string & tags.Format<"date-time">);
-  }): ICommunityPlatformCommunity.ISummary => {
-    return {
-      id: row.id as string & tags.Format<"uuid">,
-      name: row.name,
-      community_platform_category_id:
-        row.community_platform_category_id as string & tags.Format<"uuid">,
-      logo:
-        row.logo === null ? null : (row.logo as string & tags.Format<"uri">),
-      created_at: toISOStringSafe(row.created_at),
-      last_active_at: toISOStringSafe(row.last_active_at),
-    };
-  };
+  try {
+    if (useRecentlyCreated) {
+      // Recently Created ordering done in DB; count + page fetch
+      const [rows, total] = await Promise.all([
+        MyGlobal.prisma.community_platform_communities.findMany({
+          where: whereCondition,
+          orderBy: [{ created_at: "desc" }, { id: "desc" }],
+          select: {
+            id: true,
+            name: true,
+            category: true,
+            description: true,
+            logo_uri: true,
+            created_at: true,
+            last_active_at: true,
+          },
+          take: limit,
+        }),
+        MyGlobal.prisma.community_platform_communities.count({
+          where: whereCondition,
+        }),
+      ]);
 
-  // Sorting behavior
-  const sortBy = body.sort_by ?? null;
-  const sortDir =
-    body.sort_dir === "asc" || body.sort_dir === "desc"
-      ? body.sort_dir
-      : "desc";
+      // member counts in one query
+      const ids = rows.map((r) => r.id);
+      const counts =
+        ids.length === 0
+          ? []
+          : await MyGlobal.prisma.community_platform_community_members.groupBy({
+              by: ["community_platform_community_id"],
+              where: {
+                community_platform_community_id: { in: ids },
+                deleted_at: null,
+              },
+              _count: { _all: true },
+            });
+      const countMap = new Map<string, number>();
+      for (const c of counts)
+        countMap.set(c.community_platform_community_id, c._count._all);
 
-  // Name Match ranking path (default when query provided and no explicit sort_by)
-  if (query !== null && (sortBy === null || sortBy === undefined)) {
-    const [rows, total] = await Promise.all([
+      return {
+        pagination: {
+          current: 0,
+          limit: Number(limit),
+          records: Number(total),
+          pages: Number(Math.ceil((total || 0) / (limit || 1))),
+        },
+        data: rows.map((r) => ({
+          id: r.id as string & tags.Format<"uuid">,
+          name: r.name,
+          category: r.category as IECommunityCategory,
+          description: r.description ?? null,
+          logoUrl: r.logo_uri ?? null,
+          memberCount: Number(countMap.get(r.id) ?? 0) as number &
+            tags.Type<"int32"> &
+            tags.Minimum<0>,
+          createdAt: toISOStringSafe(r.created_at),
+          lastActiveAt: r.last_active_at
+            ? toISOStringSafe(r.last_active_at)
+            : null,
+        })),
+      };
+    }
+
+    // NameMatch: fetch all matches (or all when no q), rank and slice in app
+    const [allRows, total] = await Promise.all([
       MyGlobal.prisma.community_platform_communities.findMany({
         where: whereCondition,
         select: {
           id: true,
           name: true,
-          community_platform_category_id: true,
-          logo: true,
+          category: true,
+          description: true,
+          logo_uri: true,
           created_at: true,
           last_active_at: true,
         },
@@ -117,104 +161,74 @@ export async function patchcommunityPlatformSearchCommunities(props: {
       }),
     ]);
 
-    const queryLower = query.toLowerCase();
-    // Map rows with pre-converted date strings for safe sorting
-    const mapped = rows.map((r) => {
-      const created = toISOStringSafe(r.created_at);
-      const lastActive = toISOStringSafe(r.last_active_at);
-      return {
-        id: r.id,
-        name: r.name,
-        community_platform_category_id: r.community_platform_category_id,
-        logo: r.logo,
-        created_at_str: created,
-        last_active_at_str: lastActive,
-      };
-    });
+    const qLower = (q ?? "").toLowerCase();
 
-    // Rank function for Name Match
-    const rank = (item: {
-      id: string;
-      name: string;
-      created_at_str: string & tags.Format<"date-time">;
-    }): number => {
-      const nameLower = item.name.toLowerCase();
-      if (nameLower === queryLower) return 0; // exact
-      if (nameLower.startsWith(queryLower)) return 1; // prefix
-      if (nameLower.includes(queryLower)) return 2; // substring in name
-      return 3; // matched via description only
-    };
+    const ranked = allRows
+      .map((r) => ({
+        rec: r,
+        rank: (() => {
+          if (!qLower) return 3;
+          const nameLower = r.name.toLowerCase();
+          if (nameLower === qLower) return 0;
+          if (nameLower.startsWith(qLower)) return 1;
+          if (nameLower.includes(qLower)) return 2;
+          return 3;
+        })(),
+      }))
+      .sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank; // asc (better rank first)
+        const aCreated = toISOStringSafe(a.rec.created_at);
+        const bCreated = toISOStringSafe(b.rec.created_at);
+        if (aCreated < bCreated) return 1; // DESC
+        if (aCreated > bCreated) return -1;
+        return a.rec.id < b.rec.id ? 1 : a.rec.id > b.rec.id ? -1 : 0; // id DESC
+      })
+      .slice(0, limit)
+      .map((x) => x.rec);
 
-    // Deterministic sort: rank asc, created_at desc, id desc
-    mapped.sort((a, b) => {
-      const ra = rank(a);
-      const rb = rank(b);
-      if (ra !== rb) return ra - rb;
-      const timeCmp = b.created_at_str.localeCompare(a.created_at_str);
-      if (timeCmp !== 0) return timeCmp;
-      return b.id.localeCompare(a.id);
-    });
-
-    const paged = mapped.slice(skip, skip + limit).map((m) =>
-      mapToSummary({
-        id: m.id,
-        name: m.name,
-        community_platform_category_id: m.community_platform_category_id,
-        logo: m.logo,
-        created_at: m.created_at_str,
-        last_active_at: m.last_active_at_str,
-      }),
-    );
-
-    const records = Number(total);
-    const pages = Number(Math.ceil(records / limit));
+    const ids = ranked.map((r) => r.id);
+    const counts =
+      ids.length === 0
+        ? []
+        : await MyGlobal.prisma.community_platform_community_members.groupBy({
+            by: ["community_platform_community_id"],
+            where: {
+              community_platform_community_id: { in: ids },
+              deleted_at: null,
+            },
+            _count: { _all: true },
+          });
+    const countMap = new Map<string, number>();
+    for (const c of counts)
+      countMap.set(c.community_platform_community_id, c._count._all);
 
     return {
       pagination: {
-        current: Number(page),
+        current: 0,
         limit: Number(limit),
-        records,
-        pages,
+        records: Number(total),
+        pages: Number(Math.ceil((total || 0) / (limit || 1))),
       },
-      data: paged,
+      data: ranked.map((r) => ({
+        id: r.id as string & tags.Format<"uuid">,
+        name: r.name,
+        category: r.category as IECommunityCategory,
+        description: r.description ?? null,
+        logoUrl: r.logo_uri ?? null,
+        memberCount: Number(countMap.get(r.id) ?? 0) as number &
+          tags.Type<"int32"> &
+          tags.Minimum<0>,
+        createdAt: toISOStringSafe(r.created_at),
+        lastActiveAt: r.last_active_at
+          ? toISOStringSafe(r.last_active_at)
+          : null,
+      })),
     };
+  } catch (err) {
+    // Surface as generic 500 to clients
+    throw new HttpException(
+      "A temporary error occurred. Please try again in a moment.",
+      500,
+    );
   }
-
-  // Explicit sorting path
-  const [rows, total] = await Promise.all([
-    MyGlobal.prisma.community_platform_communities.findMany({
-      where: whereCondition,
-      select: {
-        id: true,
-        name: true,
-        community_platform_category_id: true,
-        logo: true,
-        created_at: true,
-        last_active_at: true,
-      },
-      orderBy:
-        sortBy === "created_at"
-          ? [{ created_at: sortDir }, { id: "desc" }]
-          : sortBy === "last_active_at"
-            ? [{ last_active_at: sortDir }, { id: "desc" }]
-            : sortBy === "name"
-              ? [{ name: sortDir }, { id: "desc" }]
-              : [{ created_at: "desc" }, { id: "desc" }],
-      skip,
-      take: limit,
-    }),
-    MyGlobal.prisma.community_platform_communities.count({
-      where: whereCondition,
-    }),
-  ]);
-
-  return {
-    pagination: {
-      current: Number(page),
-      limit: Number(limit),
-      records: Number(total),
-      pages: Number(Math.ceil(Number(total) / limit)),
-    },
-    data: rows.map(mapToSummary),
-  };
 }

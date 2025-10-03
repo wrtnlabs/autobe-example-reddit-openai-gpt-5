@@ -1,278 +1,458 @@
-# Functional Requirements – communityPlatform (04-functional-requirements.md)
+# Community Platform — Functional Business Requirements (communityPlatform)
 
-## 1) Scope and Principles
-This document specifies complete, testable business requirements for the communityPlatform. It describes WHAT the system must do from a backend behavior perspective and refrains from prescribing HOW to implement it. Requirements are expressed in EARS (Easy Approach to Requirements Syntax) where applicable.
+## Vision and Scope
+Enable topic-based sub-communities where everyone can read, and logged-in users can create communities, post, comment, vote, and join/leave. Prioritize smooth, low-friction flows with long-lived sessions and resume-after-login. Provide deterministic sorting, simple pagination, and predictable behaviors across Home, Community, Post Detail, and Search.
 
-## 2) Definitions and Roles
-- communityPlatform: The service described in this document.
-- Sub-community ("community"): A topic-based group (e.g., /c/ai) created by users where content is posted.
-- Member: An authenticated user who has joined a specific community.
-- Guest: An unauthenticated visitor.
-- Global Latest: Sitewide list of 10 most recent posts across all communities displayed on the right sidebar of Home.
-- Recent Communities: Up to 5 communities the user recently visited or interacted with, ordered by most recent activity.
-- Sort orders: Newest, Top (with tie-breakers defined herein).
-- Roles:
-  - guestVisitor: Unauthenticated user; read-only access.
-  - communityMember: Authenticated user; can post, comment, vote, join/leave, and create communities; owns created content and communities.
-  - systemAdmin: Platform administrator; may enforce policy and perform emergency interventions; does not assume authorship of others’ content.
+- THE platform SHALL keep reading open to everyone (guestVisitor).
+- THE platform SHALL require authentication for posting, commenting, voting, creating sub-communities, and joining/leaving.
+- THE platform SHALL enforce account-based ownership for editing/deleting posts and comments; only authors may modify their items (siteAdmin override for policy/legal compliance).
+- THE platform SHALL minimize validation while enforcing essential constraints only.
+- THE platform SHALL implement deterministic sorting and clear pagination rules across surfaces.
 
-## 3) Global Functional Principles (EARS)
-- THE communityPlatform SHALL allow reading public communities, posts, comments, and search results without login.
-- THE communityPlatform SHALL require login for posting, commenting, voting, creating communities, and joining/leaving communities.
-- THE communityPlatform SHALL enforce authorship ownership so that only content authors can edit or delete their own posts and comments.
-- THE communityPlatform SHALL maintain generous user sessions such that typical browsing and interaction over extended periods does not frequently require re-login.
-- WHEN a session expires during an interaction, THE communityPlatform SHALL prompt a smooth re-login and, upon success, resume the interrupted action without losing user input.
-- THE communityPlatform SHALL minimize validation to prioritize smooth, error-free user flows while respecting explicit input constraints defined in this document.
-- WHERE a user is not a member of any community, THE communityPlatform SHALL present a home feed from all communities and provide guidance to explore and join communities.
+## Roles and Access Model
+Roles
+- guestVisitor: Unauthenticated; read-only across public content and search.
+- registeredMember: Authenticated; may create communities, post, comment, vote, join/leave; may edit/delete only authored content; may edit/delete communities they created (name immutable).
+- siteAdmin: Administrative; may remove or edit any content and act on accounts/communities for policy/legal reasons.
 
-## 4) Communities: Create, Edit, Delete, Join, Leave
-### 4.1 Community Data and Constraints (EARS)
-- THE communityPlatform SHALL treat community "name" as a unique identifier that is immutable after creation.
-- THE communityPlatform SHALL accept community names containing alphanumeric characters, hyphen (-), and underscore (_), and reject other characters.
-- THE communityPlatform SHALL ensure community names are unique across all communities.
-- THE communityPlatform SHALL support optional description, optional logo, optional banner, and optional rules.
-- THE communityPlatform SHALL require a category to be exactly one of the following: "Tech & Programming", "Science", "Movies & TV", "Games", "Sports", "Lifestyle & Wellness", "Study & Education", "Art & Design", "Business & Finance", "News & Current Affairs".
-- THE communityPlatform SHALL compute member count as the number of users who have joined the community.
+Global EARS
+- THE platform SHALL allow reading of public content to all roles.
+- THE platform SHALL require login for any write action (post/comment/vote/create/join/leave).
+- THE platform SHALL enforce author guard: only the author may edit/delete their posts/comments; community editing/deletion reserved for the creator (name immutable) or siteAdmin.
 
-### 4.2 Create Community (EARS)
-- WHEN an authenticated user submits a new community with valid name, selected category, and optional metadata, THE communityPlatform SHALL create the community and assign the submitting user as the creator/owner.
-- IF the submitted name is already in use, THEN THE communityPlatform SHALL block creation and present the message "This name is already in use.".
-- IF the submitted name format includes disallowed characters or fails readability expectations, THEN THE communityPlatform SHALL block creation and present the message "This name isn’t available. Please choose something simpler.".
-- WHEN a community is created successfully, THE communityPlatform SHALL redirect the user to that community’s home in subsequent navigation state.
+## Information Architecture and Sitemap
+Global Layout Duties
+- Left Sidebar (fixed on all pages): Home, Explore, Create (community), Recent Communities (up to 5 by most recent activity; default icon shown if none).
+- Main Content: Page primary content; adheres to sort and pagination rules.
+- Right Sidebar: Contextual—Home shows Global Latest (10 newest across all communities); Community pages show Community Info + Rules.
 
-### 4.3 Edit Community (EARS)
-- WHERE a user is the creator/owner of a community, THE communityPlatform SHALL allow editing description, logo, banner, and rules, but not the name.
-- IF a non-owner attempts to edit a community, THEN THE communityPlatform SHALL deny the action and present the message "You can edit or delete only items you authored.".
-- WHEN community rules are edited, THE communityPlatform SHALL store and display the latest rules according to rules display standards.
-
-### 4.4 Delete Community (EARS)
-- WHERE the creator/owner deletes a community, THE communityPlatform SHALL delete the community and all posts within it.
-- WHEN a community is deleted, THE communityPlatform SHALL remove it from all feeds, searches, and Recent Communities, and invalidate associated joins.
-
-### 4.5 Join / Leave (EARS)
-- WHEN an authenticated user presses "Join" on a community, THE communityPlatform SHALL add the community to the user’s joined set and update the user’s home feed inclusion accordingly.
-- WHEN a joined user presses "Joined" to leave, THE communityPlatform SHALL remove the community from the user’s joined set and update the user’s home feed exclusion accordingly.
-- WHEN a join or leave occurs, THE communityPlatform SHALL immediately update the left sidebar Recent Communities list and the join button state.
-- WHERE joining, THE communityPlatform SHALL not grant moderator or administrative rights; membership is strictly for personalized display.
-- IF a guest attempts to join or leave, THEN THE communityPlatform SHALL require login and resume the attempted action upon successful login.
-
-## 5) Posts: Create, Edit, Delete, Display
-### 5.1 Composition and Constraints (EARS)
-- THE communityPlatform SHALL require selecting exactly one target community for every post.
-- THE communityPlatform SHALL require a title of length 5–120 characters.
-- THE communityPlatform SHALL require a body of length 10–10,000 characters consisting of plain text with line breaks only; scripts and executable code are prohibited.
-- THE communityPlatform SHALL support an optional author display name of length 0–32 characters; where empty, use a default such as "Anonymous" for display.
-- THE communityPlatform SHALL allow posting to a community without requiring the user to be a member of that community.
-
-### 5.2 Authoring and Ownership (EARS)
-- WHEN an authenticated user submits a valid post, THE communityPlatform SHALL create the post attributed to that user as author.
-- WHERE a user is the author of a post, THE communityPlatform SHALL allow that user to edit or delete the post.
-- IF a non-author attempts to edit or delete a post, THEN THE communityPlatform SHALL deny the action and present the message "You can edit or delete only items you authored.".
-
-### 5.3 Display Fields (EARS)
-- THE communityPlatform SHALL display on each post card: community name (e.g., /c/ai), title, author display name, creation time (relative), comment count, and score (upvotes − downvotes).
-- THE communityPlatform SHALL present creation time using user’s local timezone and friendly relative labels (e.g., "just now", "X minutes ago").
-
-## 6) Comments: Threading and Limits (EARS)
-- THE communityPlatform SHALL allow authenticated users to create, edit, and delete their own comments.
-- THE communityPlatform SHALL require comment content length 2–2,000 characters.
-- THE communityPlatform SHALL support nested reply threads such that comments can reply to posts and to other comments.
-- WHERE a user is the author of a comment, THE communityPlatform SHALL allow that user to edit or delete that comment.
-- IF a non-author attempts to edit or delete a comment, THEN THE communityPlatform SHALL deny the action and present the message "You can edit or delete only items you authored.".
-
-## 7) Voting: State Machine and Score (EARS)
-### 7.1 Voting Rules
-- THE communityPlatform SHALL allow exactly one voting state per user per item (post or comment): None, Upvote, or Downvote.
-- WHEN a user with state None presses Upvote, THE communityPlatform SHALL set the state to Upvote.
-- WHEN a user with state None presses Downvote, THE communityPlatform SHALL set the state to Downvote.
-- WHEN a user with state Upvote presses Downvote, THE communityPlatform SHALL set the state to Downvote.
-- WHEN a user with state Downvote presses Upvote, THE communityPlatform SHALL set the state to Upvote.
-- WHEN a user presses the current state button again (e.g., Upvote while Upvote), THE communityPlatform SHALL revert the state to None.
-- THE communityPlatform SHALL compute score as (number of Upvotes) − (number of Downvotes).
-- IF a user attempts to vote on their own post or comment, THEN THE communityPlatform SHALL deny the action and present the message "You can’t vote on your own posts/comments.".
-- IF a guest attempts to vote, THEN THE communityPlatform SHALL require login and resume the attempted vote upon successful login.
-
-### 7.2 Voting State Diagram
+Mermaid — Sitemap
 ```mermaid
 graph LR
-  A["None"] -->|"Upvote"| B["Upvote"]
-  A -->|"Downvote"| C["Downvote"]
-  B -->|"Downvote"| C
-  B -->|"Upvote again"| A
-  C -->|"Upvote"| B
-  C -->|"Downvote again"| A
+  A["Home(/)"] --> B["GlobalComposer(/submit)"]
+  A --> C["Search(/s)"]
+  A --> D["ExploreCommunities(/c)"]
+  D --> E["CreateCommunity(/c/create)"]
+  D --> F["CommunityHome(/c/[name])"]
+  F --> G["CommunityComposer(/c/[name]/submit)"]
+  F --> H["PostDetail(/c/[name]/[postID])"]
+  A -.-> I["LoginModal(/login)"]
+  B -.-> I
+  C -.-> I
+  D -.-> I
+  E -.-> I
+  F -.-> I
+  G -.-> I
+  H -.-> I
 ```
 
-## 8) Sorting and Pagination (Canonical Rules)
-### 8.1 Sorting: Newest and Top (EARS)
-- THE communityPlatform SHALL support two sort orders for posts and comments where applicable: Newest and Top.
-- WHERE sort order is Newest, THE communityPlatform SHALL order items by most recently created first; where creation times are equal, the item with the larger identifier SHALL come first.
-- WHERE sort order is Top, THE communityPlatform SHALL order items by higher score first; where scores tie, more recent creation time SHALL come first; where creation times tie, the item with the larger identifier SHALL come first.
+EARS (IA)
+- THE platform SHALL render Left Sidebar, Main Content, and Right Sidebar on all pages.
+- THE Right Sidebar on Home SHALL show "Global Latest" with exactly 10 newest posts; no pagination.
+- THE Right Sidebar on Community pages SHALL show "Community Info + Rules" with specified fields.
+- THE Left Sidebar SHALL include Recent Communities (up to 5), ordered by most recent activity; update immediately on relevant interactions.
 
-### 8.2 Pagination (EARS)
-- WHERE surface is a main feed (Home or Community Home), THE communityPlatform SHALL present 20 post cards per page and reveal the next 20 upon a load-more action.
-- WHERE surface is the right sidebar Global Latest, THE communityPlatform SHALL present exactly 10 most recent posts sitewide without load-more.
-- WHERE surface is search results, THE communityPlatform SHALL present 20 items per page in each tab and reveal the next 20 upon a load-more action.
+## Page-Level Requirements (A–I)
 
-## 9) Search (Posts / Communities / Comments)
-### 9.1 Query Prerequisites (EARS)
-- THE communityPlatform SHALL accept search queries of length 2 or more characters; shorter queries SHALL present the message "Please enter at least 2 characters." and SHALL not perform a search.
+### A) Home (/)
+- Sort control: Dropdown [Newest | Top].
+- Main feed: 20 post cards per load; [Load more] appends next 20; for authenticated users, include only posts from joined communities. WHERE a user has joined none, show latest or top across all communities plus guidance to explore/join.
+- Post card fields: community name (e.g., "/c/ai"), title, author display name (or "Anonymous"), relative time, comment count, score (upvotes − downvotes).
+- Right Sidebar: Global Latest (10 newest posts sitewide) with community name, single-line title (ellipsis if long), relative time.
+- Guard: Attempting post/comment/vote while unauthenticated triggers login; upon success, resume the original action.
 
-### 9.2 Post Search (EARS)
-- THE communityPlatform SHALL match query words against post titles and bodies.
-- WHERE no sort is specified for post search, THE communityPlatform SHALL default to Newest.
-- THE communityPlatform SHALL return post results in pages of 20 using the specified sort order rules.
+EARS (Home)
+- WHEN sort is Newest, THE Home feed SHALL apply Newest ordering and tie-breakers.
+- WHEN sort is Top, THE Home feed SHALL apply Top ordering and tie-breakers.
+- THE Home feed SHALL display 20 cards per page; Load more appends next 20.
+- WHERE the user has no joined communities, THE Home feed SHALL show sitewide posts per selected sort and surface guidance to explore/join.
 
-### 9.3 Community Search (EARS)
-- THE communityPlatform SHALL match search queries against community name/title for queries of length ≥ 2.
-- WHERE sort is Name Match, THE communityPlatform SHALL order communities by similarity to the query; where similarity ties, more recent creation SHALL rank higher.
-- WHERE sort is Recently Created, THE communityPlatform SHALL order communities by most recent creation time first.
+### B) Sub-Community Home (/c/[name])
+- Header: Community logo (default if absent), Create Post button, Join ↔ Joined toggle.
+- Sort toggle: [Newest | Top].
+- Inline composer available when logged in; otherwise, guarded.
+- List: 20 post cards per load; [Load more] for next 20.
+- Right Sidebar: Community Info (name, short description, created date optional, last active optional), Rules section with title "Community Rules" showing top 5 numbered rules (each up to ~2 lines).
 
-### 9.4 Comment Search (EARS)
-- THE communityPlatform SHALL support comment search returning items sorted by Newest and 20 results per page.
+EARS (Community)
+- THE page SHALL be readable by all roles.
+- WHEN Join is toggled by a logged-in user, THE page SHALL update button state immediately (optimistic) and include/exclude the community in the user’s Home feed on subsequent loads; Recent Communities updates immediately.
 
-### 9.5 Search Tabs and Items (EARS)
-- THE communityPlatform SHALL present three result tabs: Posts (default), Sub-Communities, Comments.
-- THE communityPlatform SHALL provide item fields per tab as defined in the PRD and this document, including relative time and counters where applicable.
-- IF no results are found, THEN THE communityPlatform SHALL present the message "No matching results. Try different keywords.".
+### C) Post Detail (/c/[name]/[postID])
+- Top: Community mini-info (name + small logo), Back.
+- Body: Title, author, relative time; full post content; below show vote controls, score, comment count.
+- Comments: Composer then 20 comments; [Load more] appends next 20; nested replies supported.
+- Edit/Delete visible only on items authored by the current user; siteAdmin override for policy/legal.
+- Right Sidebar: Community Info + Rules (as above).
 
-### 9.6 Search Flow Diagram
+EARS (Post Detail)
+- THE page SHALL show post content and current score/comment count.
+- THE page SHALL list 20 comments per page with Load more and support nesting.
+- WHEN session expires during comment or vote, THE page SHALL prompt re-login and resume the action upon success.
+
+### D) Global Post Composer (/submit)
+- Fields: Community selector (required), Title (5–120), Body (10–10,000, plain text/line breaks only; scripts/code prohibited), Author display name (optional 0–32), Submit.
+- Guard: If logged out on submit, prompt login and resume submission with inputs intact.
+
+EARS (Global Composer)
+- THE composer SHALL block submission when no community is selected with copy "Please choose a community to post in.".
+- THE composer SHALL enforce Title and Body length ranges and display name bounds.
+
+### E) Create a Community (/c/create)
+- Fields: Name, Description, Logo/Banner (optional), Rules (optional), Category (single selection from fixed set), Create.
+- On success: Navigate to community home.
+
+EARS (Create Community)
+- THE flow SHALL require login and check name format and uniqueness.
+- THE community name SHALL be immutable after creation.
+- THE creator SHALL be set as owner and may edit metadata (not name) and delete the community.
+
+### F) Global Search (/s)
+- Input: Large search box with placeholder "Search communities, posts, and comments (2+ characters)"; keep focus.
+- Tabs: Posts (default), Sub-Communities, Comments.
+- Pagination: 20 results per page per tab; [Load more] appends next 20.
+- Sorting: Posts—[Newest | Top] (default Newest). Sub-Communities—[Name Match | Recently Created] (default Name Match). Comments—[Newest].
+- Empty states: "Please enter at least 2 characters."; "No matching results. Try different keywords."
+
+EARS (Search)
+- IF query length < 2 after normalization, THEN no search executes and the short-query message is presented.
+- THE Posts tab SHALL match on title/body and provide all card fields including score and comment count.
+- THE Sub-Communities tab SHALL present Join | Joined button state per user.
+- THE Comments tab SHALL show a two-line snippet, author, relative time, parent post title (link), community name.
+
+### G) Explore Sub-Communities (/c)
+- Category chips filter the grid by category.
+- Community grid: 20 cards per load; [Load more] appends next 20.
+- Card fields: Logo (default if none), community name, member count, Join button; body shows description (up to 2 lines).
+
+EARS (Explore)
+- WHEN a category chip is selected, THE grid SHALL filter to that category.
+- THE grid SHALL present 20 results per page and allow Load more for next 20.
+
+### H) Community-Specific Post Composer (/c/[name]/submit)
+- Same as global composer with community pre-selected; user may change before submit.
+
+EARS (Community Composer)
+- THE composer SHALL enforce the same validation and display name rules as global composer.
+
+### I) Login & Sign Up (/login modal)
+- Inputs: identifier (email or username), password; buttons [Sign in] / [Sign up].
+- Errors: Simple retry message on failure.
+- On success: Return to previous page and resume the in-progress action.
+
+EARS (Login Modal)
+- WHEN invoked via guest guard, THE modal SHALL resume the originating action upon successful authentication.
+- WHEN login fails, THE modal SHALL present "Login failed. Please try again." and remain responsive.
+
+## Sub-Communities — Business Rules
+Creation and Inputs
+- Required: Unique name (alphanumeric, hyphen "-", underscore "_"; length 3–30; starts/ends alphanumeric; no double separators), single category from fixed set.
+- Optional: Description (≤500 chars), Logo/Banner, Rules (≤20 items, short text each).
+- Creator becomes owner and is auto-joined.
+
+Editing and Deletion
+- Editable by owner/siteAdmin: description, logo, banner, rules, category.
+- Name is immutable.
+- Deletion by owner/siteAdmin removes community and all posts; appears atomic to users.
+
+Join/Leave and Member Count
+- Join/Leave requires login; toggles are idempotent and optimistic; updates Recent Communities immediately; home feed inclusion/exclusion changes accordingly; no moderation rights conferred.
+- Member count equals number of distinct joined users; reflect changes consistently and abbreviate large numbers.
+
+Right Sidebar — Community Info + Rules
+- Show community name, short description, created date (optional), last active (optional), logo (default if none), and "Community Rules" (top 5 numbered, each up to ~2 lines).
+
+Errors and Messages
+- Name taken: "This name is already in use."
+- Invalid name: "This name isn’t available. Please choose something simpler."
+- Temporary error: "A temporary error occurred. Please try again in a moment."
+
+EARS (Communities)
+- THE platform SHALL require unique, well-formed names and one category at creation.
+- THE platform SHALL auto-join the creator upon successful creation and navigate to the community home.
+- WHEN a user toggles Join ↔ Joined, THE platform SHALL update state immediately and reconcile server-side.
+- WHEN a community is deleted, THE platform SHALL remove it and all its posts from public views.
+
+Mermaid — Join/Leave Flow
 ```mermaid
 graph LR
-  Q["Enter Query"] --> R{"Length ≥ 2?"}
-  R -->|"No"| M["Show message: 'Please enter at least 2 characters.'"]
-  R -->|"Yes"| T["Execute Search"]
-  T --> P["Posts Tab (default) sort: Newest"]
-  T --> C["Communities Tab: Name Match default"]
-  T --> K["Comments Tab: Newest"]
-  P --> E["Paginate 20 per load-more"]
-  C --> F["Paginate 20 per load-more"]
-  K --> G["Paginate 20 per load-more"]
+  A["Click 'Join'"] --> B{"Logged In?"}
+  B -->|"Yes"| C["Set Joined (Optimistic)"]
+  B -->|"No"| D["Prompt Login"]
+  D --> E{"Login Success?"}
+  E -->|"Yes"| C
+  E -->|"No"| F["Abort (No Change)"]
+  C --> G["Include In Home Feed"]
+  C --> H["Update Recent Communities"]
+  A2["Click 'Joined'"] --> I["Set Not Joined (Optimistic)"]
+  I --> J["Exclude From Home Feed"]
+  I --> K["Update Recent Communities"]
 ```
 
-## 10) Feeds and Information Architecture Behaviors
-### 10.1 Home Feed (EARS)
-- WHERE a user has joined one or more communities, THE communityPlatform SHALL populate the Home main content with posts from those communities using the selected sort order.
-- WHERE a user has not joined any community, THE communityPlatform SHALL populate the Home main content with latest or top posts across all communities and present guidance to explore/join communities in a prominent area.
-- THE communityPlatform SHALL provide a sort control at the top of Home allowing [Newest | Top] and SHALL apply the canonical sorting rules.
-- THE communityPlatform SHALL render 20 post cards in Home and reveal the next 20 upon a load-more action.
-- THE communityPlatform SHALL always show Global Latest (10 items) in the right sidebar of Home.
+## Posts — Business Rules
+Composition
+- Title: 5–120 chars. Body: 10–10,000 chars; plain text, line breaks; scripts/code prohibited. Author display name: 0–32 chars; default "Anonymous" if empty.
+- Target community selection is required (reject with "Please choose a community to post in.").
 
-### 10.2 Community Home (EARS)
-- THE communityPlatform SHALL provide Join ↔ Joined toggle on community pages for authenticated users.
-- THE communityPlatform SHALL provide a post creation entry point specific to the community for authenticated users.
-- THE communityPlatform SHALL present 20 post cards per page with load-more and allow [Newest | Top] sorting using canonical rules.
-- THE communityPlatform SHALL show Community Info + Rules box on the right sidebar per rules display standards.
+Ownership and Permissions
+- Only the author may edit/delete their post; siteAdmin override permitted for compliance.
+- Posting does not require membership in the target community.
 
-### 10.3 Post Detail (EARS)
-- THE communityPlatform SHALL display community mini-info, back navigation context, post title, author, relative time, and post content, followed by voting score and comment count.
-- THE communityPlatform SHALL display a comment composer for authenticated users and list comments (20 at a time) with load-more.
-- THE communityPlatform SHALL display Edit/Delete buttons only on items authored by the current user.
+Card Display Fields
+- Community name (e.g., "/c/ai"), title, author, relative time, comment count, score.
 
-### 10.4 Explore Communities (EARS)
-- THE communityPlatform SHALL present category filters (chips) that filter communities by the selected category.
-- THE communityPlatform SHALL present a grid/list of community cards with logo if any, community name, member count, Join button, and description truncated to two lines.
-- THE communityPlatform SHALL show 20 cards per page with load-more.
+Deletion Effects
+- Remove post from all lists (Home, Community, Global Latest, Search, Post Detail); hide its comments; prevent further interactions; update counts and scores.
 
-### 10.5 Global Post Composer (EARS)
-- THE communityPlatform SHALL provide a global composer that requires selecting a community, entering title, body, optional author display name, and submitting.
-- IF submission is attempted while logged out, THEN THE communityPlatform SHALL prompt login and return to complete submission after successful authentication.
+EARS (Posts)
+- THE platform SHALL enforce title/body/display name constraints and community selection.
+- THE platform SHALL treat title/body as plain text and neutralize executable content.
+- THE platform SHALL present post cards with required fields and relative time in user’s local timezone.
 
-## 11) Standard Messages and Display Rules (EARS)
-- THE communityPlatform SHALL display relative timestamps using the user’s local timezone with labels such as "just now", "X minutes ago", "X hours ago", "X days ago".
-- THE communityPlatform SHALL abbreviate numbers as follows: 1,000 → 1.2k; 10,000 → 12.3k; 1,000,000 → 1.2m.
-- THE communityPlatform SHALL use the following standard messages verbatim where applicable:
-  - Login required: "Please sign in to continue."
-  - No permission: "You can edit or delete only items you authored."
-  - Community name taken: "This name is already in use."
-  - Invalid community name format: "This name isn’t available. Please choose something simpler."
-  - No community selected: "Please choose a community to post in."
-  - Query too short: "Please enter at least 2 characters."
-  - Self-vote: "You can’t vote on your own posts/comments."
-  - Temporary error: "A temporary error occurred. Please try again in a moment."
-
-## 12) Optimistic Interactions, Guards, and Session Expiry (EARS)
-- WHEN a guest attempts to post, comment, vote, create a community, or join/leave, THE communityPlatform SHALL prompt login and, upon success, SHALL resume the original action with preserved user input.
-- WHEN a user toggles Join/Leave, THE communityPlatform SHALL immediately update the Home feed inclusion/exclusion, Recent Communities list, and the button state, and later reconcile with the server if necessary.
-- WHEN a user votes on a post or comment, THE communityPlatform SHALL immediately reflect the new state and score in the UI and later reconcile with the server if necessary.
-- WHEN a session expires during any guarded action, THE communityPlatform SHALL gently prompt re-login and, upon success, SHALL resume the prior flow without losing input.
-- IF a temporary error occurs during an action, THEN THE communityPlatform SHALL show the message "A temporary error occurred. Please try again in a moment." and SHALL allow a retry without losing user input.
-
-## 13) Performance and UX Expectations (Business-Perceived Targets) (EARS)
-- THE communityPlatform SHALL respond to typical read operations (feed retrieval, post detail, Global Latest) such that data appears within a perceived "instant" to "a few seconds" range.
-- THE communityPlatform SHALL ensure load-more interactions return the next 20 items without noticeable blocking in common conditions.
-- THE communityPlatform SHALL maintain sessions for a generously long duration and SHALL renew or re-establish sessions with minimal friction when needed.
-
-## 14) Permission Matrix (By Role and Capability)
-| Capability | guestVisitor | communityMember | systemAdmin |
-|---|---|---|---|
-| Read public communities/posts/comments | ✅ | ✅ | ✅ |
-| Search content | ✅ | ✅ | ✅ |
-| Create community | ❌ | ✅ | ✅ |
-| Edit community metadata (owner only) | ❌ | ✅ (owner only) | ✅ (policy actions) |
-| Delete community | ❌ | ✅ (owner only) | ✅ (policy actions) |
-| Join/Leave community | ❌ | ✅ | ✅ |
-| Create post | ❌ | ✅ | ✅ |
-| Edit/Delete own post | ❌ | ✅ | ✅ (policy actions) |
-| Create comment | ❌ | ✅ | ✅ |
-| Edit/Delete own comment | ❌ | ✅ | ✅ (policy actions) |
-| Vote on others’ content | ❌ | ✅ | ✅ |
-| Vote on own content | ❌ | ❌ | ❌ |
-
-Notes (business level):
-- System administrative actions are limited to policy enforcement and emergency interventions and do not alter authorship or ownership semantics.
-
-## 15) Error Handling and Edge Cases (Business-Level) (EARS)
-- IF a user attempts an action without sufficient permissions, THEN THE communityPlatform SHALL deny the action and present the message "You can edit or delete only items you authored." for authorship violations or an appropriate denial message for other permission issues.
-- IF a user attempts to post without selecting a community, THEN THE communityPlatform SHALL block submission and present "Please choose a community to post in.".
-- IF a search query is shorter than 2 characters, THEN THE communityPlatform SHALL present "Please enter at least 2 characters." and SHALL not run the query.
-- IF a user attempts to self-vote, THEN THE communityPlatform SHALL present "You can’t vote on your own posts/comments." and SHALL leave vote state unchanged.
-- IF transient backend issues occur, THEN THE communityPlatform SHALL present "A temporary error occurred. Please try again in a moment." and SHALL allow resubmission without data loss.
-
-## 16) Diagrams (Mermaid)
-### 16.1 Join/Leave Lifecycle
+Mermaid — Post Creation (Guest Guard)
 ```mermaid
 graph LR
-  U["User (Authenticated)"] --> J{"Pressed 'Join'?"}
-  J -->|"Yes"| A["Add to joined set"]
-  A --> B["Update Home feed inclusion"]
-  B --> C["Update Recent Communities"]
-  C --> D["Set button to 'Joined'"]
-  J -->|"No (Pressed 'Joined')"| L["Remove from joined set"]
-  L --> M["Update Home feed exclusion"]
-  M --> N["Update Recent Communities"]
-  N --> O["Set button to 'Join'"]
+  A["Open Composer"] --> B["Enter Fields"]
+  B --> C["Select Community"]
+  C --> D{"Authenticated?"}
+  D -->|"Yes"| E["Validate Lengths"]
+  D -->|"No"| F["Prompt Login"]
+  F --> G{"Login Success?"}
+  G -->|"Yes"| E
+  G -->|"No"| H["Abort (Inputs Preserved)"]
+  E --> I{"Valid?"}
+  I -->|"Yes"| J["Create Post"]
+  I -->|"No"| K["Show Validation Copy"]
 ```
 
-### 16.2 Post Creation Guard and Resume
+## Comments — Business Rules
+Creation and Structure
+- Length: 2–2,000 chars; plain text and line breaks; no executable code.
+- Nested replies supported (max depth 8 levels, including root at depth 1).
+- Pagination: 20 root comments per page; replies paginate in 20s within threads.
+
+Ownership and Soft-Deletion
+- Only the author may edit/delete their comments; siteAdmin override allowed.
+- Soft-delete comments with neutral placeholder; retain replies; exclude soft-deleted comments from post’s visible comment count.
+
+Ordering
+- Default order: Newest for root comments and replies using tie-breakers.
+
+EARS (Comments)
+- THE platform SHALL accept comments for existing posts and valid parents; preserve user content on transient errors.
+- THE platform SHALL enforce length limits and nesting depth.
+- THE platform SHALL paginate 20 root comments and 20 replies per fetch using Newest order.
+
+Mermaid — Comment Flow
 ```mermaid
 graph LR
-  X["Guest attempts to post"] --> Y["Prompt login"]
-  Y --> Z{"Login success?"}
-  Z -->|"Yes"| P["Resume composer with preserved input"]
-  Z -->|"No"| R["Allow retry without losing input"]
+  A["Submit Comment"] --> B{"Authenticated?"}
+  B -->|"Yes"| C["Validate Length & Parent"]
+  B -->|"No"| D["Prompt Login"]
+  D --> E{"Login Success?"}
+  E -->|"Yes"| C
+  E -->|"No"| F["Abort & Preserve Draft"]
+  C --> G{"Valid?"}
+  G -->|"Yes"| H["Create Comment & Increment Count"]
+  G -->|"No"| I["Reject & Preserve Draft"]
 ```
 
-## 17) Compliance and Content Ownership (EARS)
-- THE communityPlatform SHALL recognize authorship at the account level; only the author of a post/comment can edit or delete it.
-- THE communityPlatform SHALL ensure that joining a community does not grant moderation or administrative privileges.
-- THE communityPlatform SHALL remove all posts within a community upon deletion of that community by its owner.
+## Voting — Business Rules
+Vote States and Transitions
+- Single state per user per item (post/comment): None, Upvote, Downvote.
+- Transitions: None→Upvote, None→Downvote, Upvote→None, Downvote→None, Upvote→Downvote, Downvote→Upvote.
+- Self-vote prohibited; show copy "You can’t vote on your own posts/comments."; state remains None.
 
-## 18) Acceptance Criteria Summary (EARS Highlights)
-- WHEN sorting by Newest, THE communityPlatform SHALL order by creation time descending; if equal, larger identifier first.
-- WHEN sorting by Top, THE communityPlatform SHALL order by score descending; if equal, more recent creation first; if still equal, larger identifier first.
-- WHEN loading Home feed and the user has joined communities, THE communityPlatform SHALL include posts only from those communities.
-- WHEN loading Home feed and the user has not joined any community, THE communityPlatform SHALL include latest or top posts across all communities and display join guidance.
-- WHEN a user attempts restricted actions while unauthenticated, THE communityPlatform SHALL prompt login and resume the action upon success.
-- WHEN a user toggles a vote, THE communityPlatform SHALL update the state according to the voting state machine and adjust score accordingly.
-- WHEN creating or editing content, THE communityPlatform SHALL enforce length limits as specified.
-- WHEN creating a community, THE communityPlatform SHALL enforce name uniqueness and allowed characters and set category to one of the allowed values.
-- WHEN displaying times and numbers, THE communityPlatform SHALL use relative timestamps and number abbreviations as specified.
+Score Calculation
+- Score = upvotes − downvotes; update visible score on changes; abbreviate large numbers per copy rules.
 
-References to Related Documents
-- For role definitions and guard details, see the [User Roles and Permission Specification](./03-user-roles-and-permissions.md).
-- For detailed search and sort behaviors, see the [Search and Sorting Requirements](./07-search-and-sorting-requirements.md).
-- For community metadata rules, see the [Community and Content Rules](./08-community-and-content-rules.md).
-- For failure handling, see the [Error Handling and Recovery Rules](./09-error-handling-and-recovery.md).
-- For performance targets, see the [Performance and UX Expectations](./10-performance-and-ux-expectations.md).
-- For event lifecycles and optimistic updates, see the [Event Lifecycle and Optimistic UI](./12-event-lifecycle-and-optimistic-ui.md).
+Optimistic UI
+- Reflect vote state and score immediately; reconcile with server; on error, revert and show temporary error copy.
+
+EARS (Voting)
+- THE platform SHALL maintain one of {None, Upvote, Downvote} per user per item.
+- THE platform SHALL compute score as upvotes minus downvotes.
+- WHEN a user toggles a vote, THE platform SHALL apply transitions deterministically and block self-vote.
+
+Mermaid — Voting State Machine
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> "None"
+    "None" --> "Upvote": "Click Upvote"
+    "None" --> "Downvote": "Click Downvote"
+    "Upvote" --> "None": "Click Upvote"
+    "Downvote" --> "None": "Click Downvote"
+    "Upvote" --> "Downvote": "Click Downvote"
+    "Downvote" --> "Upvote": "Click Upvote"
+```
+
+## Sorting and Pagination — Deterministic Rules
+Definitions
+- Identifier: Monotonically increasing unique ID assigned at creation; larger identifier indicates more recent generation.
+
+Sort Orders
+- Newest: Order by created time desc; tie-break by identifier desc.
+- Top: Order by score desc; tie-break by created time desc; if still tied, identifier desc.
+
+Pagination Sizes
+- Main feeds (Home, Community): 20 per page; Load more appends next 20.
+- Comments: 20 root per page; 20 replies per load within a thread.
+- Global Latest (Home right sidebar): exactly 10 newest posts; no Load more.
+- Search results: 20 per page per tab.
+
+EARS (Sorting/Pagination)
+- THE platform SHALL apply Newest and Top exactly as defined, including tie-breakers.
+- THE platform SHALL honor page sizes and avoid duplicates/omissions across Load more.
+
+Mermaid — Load More Flow
+```mermaid
+graph LR
+  A["Fetch Page 1 (20)"] --> B["Display"]
+  B --> C{"User Clicks Load More?"}
+  C -->|"Yes"| D["Fetch Next 20 Using Boundary"]
+  C -->|"No"| E["Idle"]
+  D --> F{"Success?"}
+  F -->|"Yes"| G["Append & Update Boundary"]
+  F -->|"No"| H["Show Retry Option"]
+```
+
+## Search — Business Rules
+Scope
+- Posts: Match on title/body; default sort Newest; alternative Top.
+- Sub-Communities: Name Match (default) | Recently Created; Name Match prioritizes exact match, starts-with, token containment, fuzzy proximity; tie-break by more recent creation then identifier.
+- Comments: Match on content; sort Newest only.
+
+Validation and Empty States
+- Minimum query length: 2 characters after normalization; if fewer, present "Please enter at least 2 characters." and do not search.
+- No results: "No matching results. Try different keywords.".
+
+EARS (Search)
+- THE system SHALL return 20 results per page per tab.
+- THE system SHALL provide fields necessary to render each result type (posts, communities, comments) with relative time and scores where applicable.
+
+Mermaid — Global Search Flow
+```mermaid
+graph LR
+  A["Start Search"] --> B["Normalize & Validate (≥2)"]
+  B --> C{"Valid?"}
+  C -->|"No"| D["Show Short-Query Message"]
+  C -->|"Yes"| E["Run Entity Tab Query"]
+  E --> F["Apply Sort & Tie-Breakers"]
+  F --> G["Paginate 20/Tab"]
+  G --> H{"Empty?"}
+  H -->|"Yes"| I["Show No Results Copy"]
+  H -->|"No"| J["Return Results"]
+```
+
+## Session and Authentication — Experience Rules
+Session Longevity
+- Idle timeout target 30 days; absolute lifetime target 90 days.
+- Renew idle timeout on authenticated actions.
+
+Guest Guard and Resume
+- Any restricted action prompts login with copy "Please sign in to continue."; after success, resume the action with preserved inputs/intent.
+- Session expiry mid-action prompts re-login and resumes upon success.
+
+Logout
+- Logout returns to the same page in read-only state; "log out of all devices" ends all sessions for the account.
+
+EARS (Session/Auth)
+- WHEN a guest attempts post/comment/vote/create/join/leave, THE system SHALL prompt login and resume the action after success.
+- WHEN a session expires during an action, THE system SHALL prompt re-login and resume the action upon success.
+- WHILE a session is valid, THE system SHALL not interrupt permitted actions.
+
+Mermaid — Guest Guard & Resume
+```mermaid
+graph LR
+  A["Attempt Restricted Action"] --> B{"Authenticated?"}
+  B -->|"Yes"| C["Proceed"]
+  B -->|"No"| D["Show 'Please sign in to continue.'"]
+  D --> E{"Login Success?"}
+  E -->|"Yes"| F["Resume Action"]
+  E -->|"No"| G["Show Retry & Preserve State"]
+```
+
+## Standard Copy and Formatting
+Messages
+- Login required: "Please sign in to continue."
+- No permission (author guard): "You can edit or delete only items you authored."
+- Community name taken: "This name is already in use."
+- Invalid community name: "This name isn’t available. Please choose something simpler."
+- No community selected: "Please choose a community to post in."
+- Query too short: "Please enter at least 2 characters."
+- Self-vote: "You can’t vote on your own posts/comments."
+- Temporary error: "A temporary error occurred. Please try again in a moment."
+- Login failed: "Login failed. Please try again."
+- Content unavailable: "This content is no longer available."
+
+Time and Numbers
+- Relative time: "just now"; "X minutes ago" (≤60 minutes); "X hours ago" (<24h); "X days ago" (<7d); ≥7d show absolute date "MMM D, YYYY"; user’s local timezone.
+- Number abbreviations: 1,234 → "1.2k"; 1,000,000 → "1m"; 1,200,000,000 → "1.2B"; strip trailing ".0"; preserve sign for negatives; no spaces.
+
+## Interaction Rules and Optimistic UI
+Guest Guard
+- Attempting a restricted action prompts login; on success, resume with preserved inputs.
+
+Author Guard
+- Edit/Delete visible only on items authored by current user; disallowed actions show the no-permission copy.
+
+Optimistic UI
+- Reflect votes, join/leave, and new comments immediately; reconcile with server; revert on error with temporary error copy.
+
+Session Expiry
+- Prompt gentle re-login and resume on success; no data loss.
+
+## Non-Functional Expectations (Business-Level)
+Performance Targets (p95 under normal load)
+- Home/Community first page: ≤1.5s; Post detail (post ≤1.0s, initial comments ≤1.8s); Load more posts ≤1.2s; Load more comments ≤1.5s; Vote reconciliation ≤1.0s; Join/Leave updates ≤2.0s; Post submit ≤2.0s (visible to others ≤5.0s); Comment submit ≤1.5s; Search first page ≤1.8s; Global Latest freshness ≤10s.
+
+Availability and Reliability
+- Target availability: core reads 99.9% monthly; core writes 99.5% monthly.
+- Durable writes upon acknowledge; reconcile optimistic states promptly.
+
+Privacy and Observability
+- Collect only necessary data; allow account deletion/anonymization consistent with policy; retain operational logs minimally; restrict access to sensitive data; audit admin actions.
+
+## Acceptance Criteria (Business-Level)
+Authentication and Guards
+- WHEN a guest votes, THE system SHALL prompt login and apply the intended vote after success.
+- WHEN a session expires mid-comment, THE system SHALL prompt re-login and submit the comment with preserved text upon success.
+
+Sub-Communities
+- WHEN a user creates a community with a unique valid name and category, THE system SHALL create it, set ownership, auto-join, and navigate to community home.
+- WHEN a non-owner attempts to edit community metadata, THE system SHALL deny with author-guard copy.
+- WHEN owner deletes a community, THE system SHALL remove the community and all posts from public views.
+
+Posts
+- WHEN a user submits a valid post with a selected community, THE system SHALL create it and render required card fields with relative time.
+- IF title/body violates constraints or no community selected, THEN THE system SHALL block submission and show appropriate copy.
+
+Comments
+- WHEN an authenticated user submits a valid comment, THE system SHALL create it and increase visible comment count.
+- WHEN a reply would exceed depth 8, THE system SHALL reject and preserve draft.
+
+Voting
+- WHEN user toggles Upvote ↔ Downvote, THE system SHALL reflect transitions and update score accordingly; self-vote is blocked with copy.
+
+Sorting & Pagination
+- GIVEN Newest sort, WHEN two items share created time, THEN the item with the larger identifier appears first.
+- GIVEN Top sort, WHEN two items share score and time, THEN the item with the larger identifier appears first.
+- GIVEN a feed, WHEN Load more is used, THEN exactly 20 new items append without duplicates.
+
+Search
+- IF query length < 2, THEN search does not execute and shows short-query message.
+- GIVEN Posts tab and Top sort, WHEN two items share score, THEN order by more recent creation time.
+
+Formatting
+- WHEN counts exceed thresholds, THE system SHALL abbreviate per rules (e.g., 12,340 → "12.3k").
+- WHEN times are displayed, THE system SHALL use relative formats in the user’s local timezone.
+
+## Glossary
+- Global Latest: Right sidebar on Home showing 10 newest posts sitewide.
+- Joined Communities: Communities included in a user’s Home main feed.
+- Score: Upvotes minus downvotes for posts or comments.
+- Identifier: Monotonically increasing unique ID used for tie-breakers when created times are equal.
+- Optimistic UI: Immediate UI updates that later reconcile with server-confirmed state.
+
+End of specification.

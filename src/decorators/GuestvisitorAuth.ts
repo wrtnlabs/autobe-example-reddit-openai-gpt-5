@@ -5,24 +5,18 @@ import { Singleton } from "tstl";
 
 import { guestvisitorAuthorize } from "../providers/authorize/guestvisitorAuthorize";
 
-/**
- * Injects authenticated GuestvisitorPayload into controller handlers.
- * Usage: someMethod(@GuestvisitorAuth() guest: GuestvisitorPayload) { ... }
- */
-export const GuestvisitorAuth =
-  (): ParameterDecorator =>
+/** Parameter decorator for guestvisitor authentication/authorization. */
+export const GuestvisitorAuth = (): ParameterDecorator =>
   (
     target: object,
     propertyKey: string | symbol | undefined,
     parameterIndex: number,
   ): void => {
-    // Add Bearer auth requirement to Swagger for this route
     SwaggerCustomizer((props) => {
       props.route.security ??= [];
       props.route.security.push({ bearer: [] });
     })(target, propertyKey as string, undefined!);
 
-    // Bind the singleton param decorator instance
     singleton.get()(target, propertyKey, parameterIndex);
   };
 

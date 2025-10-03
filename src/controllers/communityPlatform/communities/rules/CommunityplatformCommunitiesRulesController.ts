@@ -1,65 +1,78 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedParam, TypedBody } from "@nestia/core";
 import typia, { tags } from "typia";
-import { patchcommunityPlatformCommunitiesCommunityIdRules } from "../../../../providers/patchcommunityPlatformCommunitiesCommunityIdRules";
-import { getcommunityPlatformCommunitiesCommunityIdRulesRuleId } from "../../../../providers/getcommunityPlatformCommunitiesCommunityIdRulesRuleId";
+import { patchCommunityPlatformCommunitiesCommunityNameRules } from "../../../../providers/patchCommunityPlatformCommunitiesCommunityNameRules";
+import { getCommunityPlatformCommunitiesCommunityNameRulesRuleId } from "../../../../providers/getCommunityPlatformCommunitiesCommunityNameRulesRuleId";
 
 import { IPageICommunityPlatformCommunityRule } from "../../../../api/structures/IPageICommunityPlatformCommunityRule";
 import { ICommunityPlatformCommunityRule } from "../../../../api/structures/ICommunityPlatformCommunityRule";
 
-@Controller("/communityPlatform/communities/:communityId/rules")
+@Controller("/communityPlatform/communities/:communityName/rules")
 export class CommunityplatformCommunitiesRulesController {
   /**
-   * List community rules (community_platform_community_rules) for a community
-   * with pagination and sorting.
+   * List community rules from community_platform_community_rules for a given
+   * community.
    *
-   * This operation lists rule rows stored in community_platform_community_rules
-   * for a specific community (community_platform_community_id). The schema
-   * defines fields including order_index (unique per community to preserve
-   * deterministic order), text (1–200 chars), and lifecycle timestamps
-   * (created_at, updated_at, deleted_at). Each rule belongs to a
-   * community_platform_communities record. The default display order in product
-   * requirements is the preserved owner-defined ordering, which this endpoint
-   * reflects by sorting primarily by order_index and secondarily by created_at
-   * for stability.
+   * Purpose and Overview: Retrieve rule items associated with a community for
+   * display in the right‑sidebar “Community Rules” section. The underlying
+   * model community_platform_community_rules stores per‑community ordered rules
+   * with order_index (starting at 1) and text. The parent community is
+   * identified via community_platform_communities by normalizing communityName
+   * to name_key and resolving its id. This endpoint returns a list with
+   * pagination suited for showing the top 5 rules by order, while also
+   * supporting larger lists for management views.
    *
-   * Security and visibility: Rules are public presentation metadata of a
-   * community and can be retrieved without authentication. The provider logic
-   * should filter out records with non-null deleted_at so only active rules are
-   * returned. Consumers typically display the first 5 items by default and
-   * allow expansion to the full set as needed.
+   * Security and Permissions: This is a public read operation. No
+   * authentication is required to list rules belonging to a visible community.
+   * Administrative or owner permissions are only required when creating,
+   * editing, or reordering rules (handled by separate write endpoints, not this
+   * read operation).
    *
-   * Query capabilities: The request body accepts pagination (page/size or
-   * cursor-based fields), optional free-text search against text, and sorting
-   * options (e.g., order_index asc by default, with tie-breaker on created_at).
-   * The response returns a paginated container including items and pagination
-   * metadata useful for load-more interactions.
+   * Database Relationships: Each rule row belongs to exactly one community via
+   * community_platform_community_id. The rules are typically rendered in
+   * numeric order (order_index ascending). The rule text column (text) is
+   * concise (~≤100 chars), and timestamps (created_at, updated_at) exist for
+   * audit. Soft deletion is supported via deleted_at; the read operation should
+   * exclude removed items by default unless explicitly requested via filters.
    *
-   * Related operations: Use POST /communityPlatform/communityMember/communities
-   * to create the community, PUT
-   * /communityPlatform/communityMember/communities/{communityId} to edit its
-   * metadata, and DELETE
-   * /communityPlatform/communityMember/communities/{communityId} to remove it
-   * from public surfaces. Errors include not found (invalid communityId) and
-   * invalid pagination or sorting parameters.
+   * Validation and Business Logic: Requests include pagination parameters
+   * (e.g., cursor and limit), sort options (default order_index ascending for
+   * display; created_at for maintenance), and optional text search filtered
+   * against the text field. The community must exist and be active (deleted_at
+   * null) for results to be returned. The API enforces deterministic ordering
+   * and stable cursor windows so that paging avoids duplicates or omissions.
+   *
+   * Related Operations and Usage: Clients commonly call GET
+   * /communities/{communityName} to render community header details and then
+   * this endpoint to fetch rule items (top 5 for the box). Owner‑level edits to
+   * community metadata use PUT /communities/{communityName}; rule creation or
+   * reordering is outside the scope of this read operation.
+   *
+   * Error Handling: If the community is not found or not visible, return
+   * not-found. Transient errors use the standard temporary error message.
+   * Pagination cursors that are malformed should return a bad-request response
+   * with a clear message.
    *
    * @param connection
-   * @param communityId Identifier of the community whose rules are being
-   *   listed.
-   * @param body Search, filtering, and pagination parameters for retrieving
-   *   community rules.
+   * @param communityName Immutable community name whose rules will be listed
+   *   (normalized to name_key).
+   * @param body Search and pagination parameters for listing community rules
+   *   (cursor, limit, sort, text filter).
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Patch()
   public async index(
-    @TypedParam("communityId")
-    communityId: string & tags.Format<"uuid">,
+    @TypedParam("communityName")
+    communityName: string &
+      tags.MinLength<3> &
+      tags.MaxLength<30> &
+      tags.Pattern<"^[A-Za-z0-9](?:[A-Za-z0-9_-]{1,28}[A-Za-z0-9])?$">,
     @TypedBody()
     body: ICommunityPlatformCommunityRule.IRequest,
   ): Promise<IPageICommunityPlatformCommunityRule> {
     try {
-      return await patchcommunityPlatformCommunitiesCommunityIdRules({
-        communityId,
+      return await patchCommunityPlatformCommunitiesCommunityNameRules({
+        communityName,
         body,
       });
     } catch (error) {
@@ -69,55 +82,62 @@ export class CommunityplatformCommunitiesRulesController {
   }
 
   /**
-   * Get a single rule from community_platform_community_rules by community and
-   * rule identifiers.
+   * Get a community rule (community_platform_community_rules) by ID within a
+   * named community.
    *
-   * This operation returns the details of a single rule record from the
-   * community_platform_community_rules table. According to the schema comments,
-   * each rule is an ordered item authored by the community owner to set
-   * participation expectations, and includes a stable order_index per community
-   * to preserve deterministic ordering. The returned fields include the rule
-   * identifier, the parent community identifier, the display order, the rule
-   * text (1–200 chars), and the standard timestamps.
+   * Fetch one rule item that appears under the "Community Rules" section for a
+   * given community. The underlying Prisma table
+   * community_platform_community_rules stores short ordered rules associated
+   * with a community (columns: id, community_platform_community_id,
+   * order_index, text, created_at, updated_at, deleted_at). Business rules
+   * specify concise text (≈ ≤100 chars) and ordered presentation; only the top
+   * five by order_index are commonly displayed on the Community Info + Rules
+   * box.
    *
-   * Security and permissions: Reading public communities, posts, comments, and
-   * their metadata is open to everyone as per the product requirements.
-   * Therefore this read endpoint is public. Even though the underlying table
-   * contains ownership semantics (rules managed by the community owner),
-   * retrieval does not require authentication.
+   * Security and permissions: This is a read-only operation on public community
+   * metadata and is accessible to all users, including unauthenticated
+   * visitors. Authoring constraints (only the community owner or siteAdmin may
+   * modify rules) do not restrict reads. Implementers should still ensure that
+   * if a community or rule has been marked deleted (deleted_at set), the
+   * resource is not returned in normal listings and is treated as unavailable.
    *
-   * Database relationships: The rule references community_platform_communities
-   * via community_platform_community_id (onDelete: Cascade). The client must
-   * specify both the parent communityId and the ruleId to scope the request to
-   * the correct parent entity. Providers should ensure that only active
-   * (deleted_at IS NULL) rules are returned.
+   * Database relationships: Each rule is tied to a parent community via
+   * community_platform_community_rules.community_platform_community_id
+   * referencing community_platform_communities.id. The community itself has
+   * immutable name and a normalized key (name_key) for case-insensitive
+   * uniqueness, as described in the community_platform_communities model. The
+   * operation must ensure the requested ruleId belongs to the community
+   * identified by communityName before returning it.
    *
-   * Validation and behavior: The provider should validate that the specified
-   * rule belongs to the specified community. If the record is missing or marked
-   * deleted (deleted_at not null), respond with a not-found outcome at the
-   * business layer. Related endpoints include POST
-   * /communityPlatform/communityMember/communities/{communityId}/rules for
-   * creation, PUT
-   * /communityPlatform/communityMember/communities/{communityId}/rules/{ruleId}
-   * for updates, and DELETE
-   * /communityPlatform/communityMember/communities/{communityId}/rules/{ruleId}
-   * for removal.
+   * Validation and expected behavior: The path parameter communityName follows
+   * the platform’s naming policy (alphanumeric with hyphen/underscore, length
+   * 3–30, immutable post-creation). The ruleId is a UUID. If either the
+   * community does not exist, has been removed (deleted_at set), or the rule
+   * does not exist within that community (including when deleted_at is set),
+   * respond with a not-found outcome per provider conventions. Related
+   * operations include: POST to create a rule for a community, PUT to modify an
+   * existing rule, and DELETE to mark a rule as deleted while preserving
+   * history.
    *
    * @param connection
-   * @param communityId Parent community’s ID (UUID) that owns the rule
-   * @param ruleId Target rule’s ID (UUID) within the specified community
+   * @param communityName Immutable community name used to resolve the parent
+   *   community
+   * @param ruleId Target rule identifier (UUID) within the specified community
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Get(":ruleId")
   public async at(
-    @TypedParam("communityId")
-    communityId: string & tags.Format<"uuid">,
+    @TypedParam("communityName")
+    communityName: string &
+      tags.MinLength<3> &
+      tags.MaxLength<30> &
+      tags.Pattern<"^[A-Za-z0-9](?:[A-Za-z0-9_-]{1,28}[A-Za-z0-9])?$">,
     @TypedParam("ruleId")
     ruleId: string & tags.Format<"uuid">,
   ): Promise<ICommunityPlatformCommunityRule> {
     try {
-      return await getcommunityPlatformCommunitiesCommunityIdRulesRuleId({
-        communityId,
+      return await getCommunityPlatformCommunitiesCommunityNameRulesRuleId({
+        communityName,
         ruleId,
       });
     } catch (error) {

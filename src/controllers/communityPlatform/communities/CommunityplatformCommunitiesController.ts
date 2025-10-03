@@ -1,8 +1,8 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedBody, TypedParam } from "@nestia/core";
 import typia, { tags } from "typia";
-import { patchcommunityPlatformCommunities } from "../../../providers/patchcommunityPlatformCommunities";
-import { getcommunityPlatformCommunitiesCommunityId } from "../../../providers/getcommunityPlatformCommunitiesCommunityId";
+import { patchCommunityPlatformCommunities } from "../../../providers/patchCommunityPlatformCommunities";
+import { getCommunityPlatformCommunitiesCommunityName } from "../../../providers/getCommunityPlatformCommunitiesCommunityName";
 
 import { IPageICommunityPlatformCommunity } from "../../../api/structures/IPageICommunityPlatformCommunity";
 import { ICommunityPlatformCommunity } from "../../../api/structures/ICommunityPlatformCommunity";
@@ -10,42 +10,43 @@ import { ICommunityPlatformCommunity } from "../../../api/structures/ICommunityP
 @Controller("/communityPlatform/communities")
 export class CommunityplatformCommunitiesController {
   /**
-   * Search and paginate communities from Prisma table
-   * community_platform_communities for public discovery.
+   * Search and list communities (community_platform_communities).
    *
-   * This operation lists community records from community_platform_communities
-   * for public discovery and navigation. The Prisma schema describes
-   * communities with an immutable unique name, optional description, optional
-   * logo and banner URIs, a required category (via
-   * community_platform_categories), an owner reference
-   * (community_platform_users), last_active_at, disabled_at for administrative
-   * disablement, and lifecycle timestamps. Records with a non-null deleted_at
-   * are considered removed from active views and should be excluded from
-   * discovery responses. When disabled_at is set, communities should be hidden
-   * from promotion surfaces per schema note, which informs filtering behavior
-   * for general listings.
+   * This operation returns a paginated list of communities based on the
+   * community_platform_communities table. Key columns include id,
+   * community_platform_user_id (creator), name, name_key (normalized
+   * uniqueness), category, description, logo_uri, banner_uri, last_active_at,
+   * created_at, updated_at, and deleted_at. Client UIs commonly present name,
+   * short description, logo/banner (when present), created timing, and
+   * membership count (computed from community_platform_community_members)
+   * without exposing underlying IDs.
    *
-   * This endpoint is public read and does not require authentication. It
-   * enables search and exploration scenarios: free-text search on
-   * name/description, category filtering by community_platform_category_id or
-   * business code, and sorting. Common sorts include Newest (created_at
-   * descending with stable tie-breaking) and activity-based ordering
-   * (last_active_at). Name-based sorting can support alphabetical ordering for
-   * browse views. The request body ICommunityPlatformCommunity.IRequest conveys
-   * filters and pagination (page, limit), and sort directives with explicit
-   * direction.
+   * Security and visibility: the endpoint is public for reading. Normal
+   * responses should exclude records where deleted_at is set, ensuring only
+   * active communities are listed. Content is readable to all roles.
    *
-   * The response is a paginated container
-   * IPageICommunityPlatformCommunity.ISummary, returning essential fields for
-   * list rendering: id, immutable name, category linkage (id/code/name if
-   * denormalized in DTO), optional description and logo/banner URIs, member
-   * count if included by view composition, and timestamps needed for sorting
-   * (created_at, last_active_at). This list endpoint pairs with GET
-   * /communities/{communityId} for detail screens and with other feed endpoints
-   * for posts within a community.
+   * Ordering and pagination: default ordering for Explore lists is by recently
+   * created (created_at desc, then id desc for ties). Category filtering is
+   * supported via the category column, and name-based matching may be applied
+   * at the application layer using name/name_key and trigram indexes defined in
+   * the schema. Use cursor-based pagination derived from the active sort’s key
+   * tuple to return 20 items per page by default, with deterministic
+   * continuation.
+   *
+   * Related tables and counts: memberCount in cards can be derived from
+   * community_platform_community_members per community, counting rows where
+   * deleted_at is null. Rules shown in the right sidebar originate from
+   * community_platform_community_rules; only the top 5 rules (by order_index)
+   * are commonly displayed on detail pages and are not required in this listing
+   * response.
+   *
+   * Error handling: transient failures return standard temporary error copy;
+   * validation errors on filters return 400-series responses with clear
+   * messages. Timestamps are ISO-8601 in UTC.
    *
    * @param connection
-   * @param body Community search filters, sorting, and pagination parameters.
+   * @param body Search, filter, sort, and pagination parameters for communities
+   *   discovery.
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Patch()
@@ -54,7 +55,7 @@ export class CommunityplatformCommunitiesController {
     body: ICommunityPlatformCommunity.IRequest,
   ): Promise<IPageICommunityPlatformCommunity.ISummary> {
     try {
-      return await patchcommunityPlatformCommunities({
+      return await patchCommunityPlatformCommunities({
         body,
       });
     } catch (error) {
@@ -64,46 +65,65 @@ export class CommunityplatformCommunitiesController {
   }
 
   /**
-   * Get a specific community (community_platform_communities) by ID for public
-   * detail view.
+   * Get a community by name from community_platform_communities.
    *
-   * This read operation fetches a specific community from
-   * community_platform_communities using its id (UUID). Per schema comments, a
-   * community has an immutable unique name and optional metadata assets,
-   * belongs to a category in community_platform_categories, and references an
-   * owner in community_platform_users. It also tracks last_active_at for
-   * display and sorting, disabled_at to indicate administrative disablement,
-   * and created_at/updated_at timestamps. Records where deleted_at is non-null
-   * are considered removed from active use; standard behavior for public detail
-   * retrieval is to return a not-found outcome for such records.
+   * Purpose and Overview: Fetch detailed information for a single sub‑community
+   * identified by its immutable name. The underlying Prisma model is
+   * community_platform_communities, which defines an owner via
+   * community_platform_user_id, the display/URL name (name) and a normalized
+   * case-insensitive uniqueness key (name_key), a single category, optional
+   * description, and optional branding URIs (logo_uri, banner_uri). Timestamps
+   * include created_at, updated_at, and an optional last_active_at for recent
+   * activity displays. Records that have been removed from visibility are
+   * excluded by the application using the deleted_at column.
    *
-   * The endpoint is public read and requires no authentication. It supports
-   * community detail pages that display identity and metadata. For community
-   * rules, the system stores an ordered list in
-   * community_platform_community_rules with order_index and text; clients may
-   * call a separate endpoint to fetch them or receive them pre-composed
-   * depending on DTO design. This operation does not modify any state and thus
-   * returns data without side effects.
+   * Security and Permissions: This read operation is public and requires no
+   * authentication. Ownership does not affect read access; however, the
+   * application may compute isOwner or isMember flags in the response for the
+   * current session context using community_platform_users and
+   * community_platform_community_members. Administrative overrides
+   * (community_platform_siteadmins) affect write operations, not reads.
    *
-   * Typical errors include not found when the identifier does not match an
-   * available community and visibility constraints when disabled_at is set
-   * (e.g., detail may remain accessible while promotion surfaces hide it
-   * depending on product policy). This endpoint is commonly used with the
-   * list/search endpoint PATCH /communities and downstream post list endpoints
-   * within the community.
+   * Database Relationships: Community rules are stored in
+   * community_platform_community_rules with order_index and text fields, and
+   * posts in community_platform_posts. Both are associated via the community’s
+   * id. Member counts derive from community_platform_community_members
+   * (distinct user rows for the community), while the left sidebar “Recent
+   * Communities” uses community_platform_recent_communities to record per-user
+   * last_activity_at for up to five items.
+   *
+   * Validation and Business Logic: The path parameter communityName represents
+   * the user-facing name (name). The server normalizes it to name_key to
+   * enforce case-insensitive lookup, rejecting reserved names by business rule
+   * and returning a not-found result when no active record exists (e.g.,
+   * deleted_at is set). The name is immutable after creation per requirements;
+   * this endpoint never changes it.
+   *
+   * Related Operations and Usage: Use this endpoint to populate Community Home
+   * (/c/[name]) and Post Detail sidebars. For the numbered “Community Rules”
+   * section, clients typically call the rules listing endpoint to retrieve
+   * ordered rule items limited to the top 5 by order_index.
+   *
+   * Error Handling: If the community does not exist or is not visible, return a
+   * not-found response. Transient errors should use the platform’s standard
+   * temporary error message, and clients may retry.
    *
    * @param connection
-   * @param communityId Unique identifier of the target community (UUID).
+   * @param communityName Immutable community name used to locate the record
+   *   (normalized to name_key for lookup).
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
-  @TypedRoute.Get(":communityId")
+  @TypedRoute.Get(":communityName")
   public async at(
-    @TypedParam("communityId")
-    communityId: string & tags.Format<"uuid">,
+    @TypedParam("communityName")
+    communityName: string &
+      tags.MinLength<3> &
+      tags.MaxLength<30> &
+      tags.Pattern<"^[A-Za-z0-9](?:[A-Za-z0-9_-]{1,28}[A-Za-z0-9])?$">,
   ): Promise<ICommunityPlatformCommunity> {
     try {
-      return await getcommunityPlatformCommunitiesCommunityId({
-        communityId,
+      return await getCommunityPlatformCommunitiesCommunityName({
+        communityName,
       });
     } catch (error) {
       console.log(error);

@@ -1,163 +1,184 @@
-import jwt from "jsonwebtoken";
-import { MyGlobal } from "../MyGlobal";
-import typia, { tags } from "typia";
-import { Prisma } from "@prisma/client";
-import { v4 } from "uuid";
-import { toISOStringSafe } from "../util/toISOStringSafe";
 import { HttpException } from "@nestjs/common";
-import { ICommunityPlatformGuestVisitorJoin } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformGuestVisitorJoin";
-import { ICommunityPlatformGuestVisitor } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformGuestVisitor";
+import { Prisma } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import typia, { tags } from "typia";
+import { v4 } from "uuid";
+import { MyGlobal } from "../MyGlobal";
+import { PasswordUtil } from "../utils/passwordUtil";
+import { toISOStringSafe } from "../utils/toISOStringSafe";
 
-export async function postauthGuestVisitorJoin(props: {
-  body: ICommunityPlatformGuestVisitorJoin.ICreate;
+import { ICommunityPlatformGuestVisitor } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformGuestVisitor";
+import { IClientContext } from "@ORGANIZATION/PROJECT-api/lib/structures/IClientContext";
+import { IAuthorizationToken } from "@ORGANIZATION/PROJECT-api/lib/structures/IAuthorizationToken";
+import { ICommunityPlatformUser } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformUser";
+
+export async function postAuthGuestVisitorJoin(props: {
+  body: ICommunityPlatformGuestVisitor.IJoin;
 }): Promise<ICommunityPlatformGuestVisitor.IAuthorized> {
   /**
-   * Register or correlate an anonymous visitor and issue initial guest JWT.
+   * Registers a temporary guest identity and creates an initial session.
    *
-   * Public endpoint: Creates a new community_platform_guestvisitors row or
-   * correlates an existing one by device_fingerprint, updating last_seen_at.
-   * Issues guest-scoped JWT tokens and returns a lightweight authorization
-   * payload including an optional embedded summary.
+   * - Creates a row in Actors.community_platform_users with normalized unique
+   *   keys
+   * - Hashes the provided (or generated) password using PasswordUtil
+   * - Establishes a session in Sessions.community_platform_sessions with a hashed
+   *   token
+   * - Issues JWT access and refresh tokens for client use
    *
-   * No user credentials or session rows are created for guest visitors.
+   * Public endpoint: no authentication required.
    *
    * @param props - Request properties
-   * @param props.body - Client hints for correlating/creating a guest visitor
-   * @returns Authorized guest payload with tokens and visitor context
-   * @throws {HttpException} 500 on unexpected server/database errors
+   * @param props.body - Guest join payload (optional identity inputs and client
+   *   hints)
+   * @returns Authorization payload containing user id, tokens, and optional
+   *   user summary
+   * @throws {HttpException} 409 on normalized email/username uniqueness
+   *   conflict
+   * @throws {HttpException} 500 on unexpected errors during creation
    */
   const { body } = props;
 
-  // Time calculations (ISO strings only)
+  // Helper to generate safe ephemeral values when omitted
+  const randomSuffix = v4().replace(/-/g, "").slice(0, 12);
+  const generatedEmail = `guest-${randomSuffix}@example.com`;
+  const providedEmail =
+    body.email && body.email.trim().length > 0
+      ? body.email.trim()
+      : generatedEmail;
+  const emailNormalized = providedEmail.toLowerCase();
+
+  const generatedUsername = `guest_${randomSuffix}`;
+  const providedUsername =
+    body.username && body.username.trim().length > 0
+      ? body.username.trim()
+      : generatedUsername;
+  const usernameNormalized = providedUsername.toLowerCase();
+
+  const generatedPassword = `GUEST_${v4()}_${randomSuffix}`;
+  const plainPassword =
+    body.password && body.password.length > 0
+      ? body.password
+      : generatedPassword;
+
+  // Timepoints
   const now = toISOStringSafe(new Date());
-  const accessExpiresAt = toISOStringSafe(
-    new Date(new Date(now).getTime() + 60 * 60 * 1000),
-  ); // +1h
+  const accessExpiredAt = toISOStringSafe(
+    new Date(Date.now() + 60 * 60 * 1000),
+  ); // 1h
   const refreshableUntil = toISOStringSafe(
-    new Date(new Date(now).getTime() + 7 * 24 * 60 * 60 * 1000),
-  ); // +7d
+    new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  ); // 7d
+
+  // Pre-generate IDs (must provide; schema has no defaults)
+  const userId = typia.assert<string & tags.Format<"uuid">>(v4());
+  const sessionId = typia.assert<string & tags.Format<"uuid">>(v4());
+
+  // Generate a session token string and hash it for storage (plaintext never stored)
+  const sessionPlainToken = `${v4()}.${v4()}.${randomSuffix}`;
 
   try {
-    // Attempt correlation by device_fingerprint when provided
-    if (body.device_fingerprint !== undefined) {
-      const existing =
-        await MyGlobal.prisma.community_platform_guestvisitors.findFirst({
-          where: {
-            device_fingerprint: body.device_fingerprint,
-          },
-          orderBy: { created_at: "desc" },
-        });
+    await MyGlobal.prisma.$transaction(async (tx) => {
+      const passwordHash = await PasswordUtil.hash(plainPassword);
 
-      if (existing) {
-        const updated =
-          await MyGlobal.prisma.community_platform_guestvisitors.update({
-            where: { id: existing.id },
-            data: {
-              // keep fingerprint as-is (or overwrite if provided again)
-              device_fingerprint: body.device_fingerprint ?? undefined,
-              user_agent: body.user_agent ?? undefined,
-              ip: body.ip ?? undefined,
-              last_seen_at: now,
-              updated_at: now,
-            },
-            select: { id: true, first_seen_at: true },
-          });
+      // Create user
+      await tx.community_platform_users.create({
+        data: {
+          id: userId,
+          email: providedEmail,
+          email_normalized: emailNormalized,
+          username: providedUsername,
+          username_normalized: usernameNormalized,
+          password_hash: passwordHash,
+          display_name: body.displayName ?? null,
+          last_login_at: now,
+          created_at: now,
+          updated_at: now,
+          deleted_at: null,
+        },
+      });
 
-        const access = jwt.sign(
-          {
-            id: updated.id as string & tags.Format<"uuid">,
-            type: "guestVisitor",
-          },
-          MyGlobal.env.JWT_SECRET_KEY,
-          { expiresIn: "1h", issuer: "autobe" },
-        );
-        const refresh = jwt.sign(
-          {
-            id: updated.id as string & tags.Format<"uuid">,
-            type: "guestVisitor",
-            tokenType: "refresh",
-          },
-          MyGlobal.env.JWT_SECRET_KEY,
-          { expiresIn: "7d", issuer: "autobe" },
-        );
+      // Prepare client context (nullable fields)
+      const client = body.client;
 
-        return {
-          id: updated.id as string & tags.Format<"uuid">,
-          first_seen_at: updated.first_seen_at
-            ? toISOStringSafe(updated.first_seen_at)
-            : undefined,
+      // Create session
+      const hashedToken = await PasswordUtil.hash(sessionPlainToken);
+      await tx.community_platform_sessions.create({
+        data: {
+          id: sessionId,
+          community_platform_user_id: userId,
+          hashed_token: hashedToken,
+          user_agent: client?.userAgent ?? null,
+          ip: client?.ip ?? null,
+          client_platform: client?.clientPlatform ?? null,
+          client_device: client?.clientDevice ?? null,
+          session_type: client?.sessionType ?? null,
+          created_at: now,
+          updated_at: now,
           last_seen_at: now,
-          token: {
-            access,
-            refresh,
-            expired_at: accessExpiresAt,
-            refreshable_until: refreshableUntil,
-          },
-          guestVisitor: {
-            id: updated.id as string & tags.Format<"uuid">,
-            first_seen_at: updated.first_seen_at
-              ? toISOStringSafe(updated.first_seen_at)
-              : now,
-            last_seen_at: now,
-          },
-        };
-      }
-    }
-
-    // Create new guest visitor when no correlation match
-    const newId = v4() as string & tags.Format<"uuid">;
-
-    await MyGlobal.prisma.community_platform_guestvisitors.create({
-      data: {
-        id: newId,
-        device_fingerprint: body.device_fingerprint ?? null,
-        user_agent: body.user_agent ?? null,
-        ip: body.ip ?? null,
-        first_seen_at: now,
-        last_seen_at: now,
-        created_at: now,
-        updated_at: now,
-      },
+          expires_at: refreshableUntil,
+          revoked_at: null,
+          deleted_at: null,
+        },
+      });
     });
-
-    const access = jwt.sign(
-      {
-        id: newId,
-        type: "guestVisitor",
-      },
-      MyGlobal.env.JWT_SECRET_KEY,
-      { expiresIn: "1h", issuer: "autobe" },
-    );
-    const refresh = jwt.sign(
-      {
-        id: newId,
-        type: "guestVisitor",
-        tokenType: "refresh",
-      },
-      MyGlobal.env.JWT_SECRET_KEY,
-      { expiresIn: "7d", issuer: "autobe" },
-    );
-
-    return {
-      id: newId,
-      first_seen_at: now,
-      last_seen_at: now,
-      token: {
-        access,
-        refresh,
-        expired_at: accessExpiresAt,
-        refreshable_until: refreshableUntil,
-      },
-      guestVisitor: {
-        id: newId,
-        first_seen_at: now,
-        last_seen_at: now,
-      },
-    };
   } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      throw new HttpException("Database error", 500);
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      // Unique constraint violation on email_normalized or username_normalized
+      throw new HttpException(
+        "Conflict: Email or username already exists (case-insensitive)",
+        409,
+      );
     }
-    throw new HttpException("Internal Server Error", 500);
+    throw new HttpException(
+      "Internal Server Error: Failed to register guest user",
+      500,
+    );
   }
+
+  // Issue JWT tokens (payload minimal and role-specific)
+  const access = jwt.sign(
+    {
+      id: userId,
+      type: "guestvisitor",
+    },
+    MyGlobal.env.JWT_SECRET_KEY,
+    { expiresIn: "1h", issuer: "autobe" },
+  );
+
+  const refresh = jwt.sign(
+    {
+      id: userId,
+      type: "guestvisitor",
+      tokenType: "refresh",
+    },
+    MyGlobal.env.JWT_SECRET_KEY,
+    { expiresIn: "7d", issuer: "autobe" },
+  );
+
+  // Build optional user summary for convenience
+  const userSummary: ICommunityPlatformUser.ISummary = {
+    id: userId,
+    username: providedUsername,
+    email: providedEmail,
+    display_name: body.displayName ?? null,
+    last_login_at: now,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const token: IAuthorizationToken = {
+    access,
+    refresh,
+    expired_at: accessExpiredAt,
+    refreshable_until: refreshableUntil,
+  };
+
+  return {
+    id: userId,
+    token,
+    user: userSummary,
+  };
 }

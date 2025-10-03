@@ -1,7 +1,7 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedBody } from "@nestia/core";
 import typia from "typia";
-import { patchcommunityPlatformSearchCommunities } from "../../../../providers/patchcommunityPlatformSearchCommunities";
+import { patchCommunityPlatformSearchCommunities } from "../../../../providers/patchCommunityPlatformSearchCommunities";
 
 import { IPageICommunityPlatformCommunity } from "../../../../api/structures/IPageICommunityPlatformCommunity";
 import { ICommunityPlatformCommunity } from "../../../../api/structures/ICommunityPlatformCommunity";
@@ -9,40 +9,54 @@ import { ICommunityPlatformCommunity } from "../../../../api/structures/ICommuni
 @Controller("/communityPlatform/search/communities")
 export class CommunityplatformSearchCommunitiesController {
   /**
-   * Search communities by name with pagination and sorting
-   * (community_platform_communities).
+   * Search communities (community_platform_communities) with Name Match or
+   * Recently Created sorting.
    *
-   * This operation searches the community_platform_communities table.
-   * Communities include immutable unique name, optional description, optional
-   * logo/banner URIs, category reference (community_platform_categories),
-   * last_active_at, disabled_at, and timestamps. Logical deletion is tracked by
-   * deleted_at and such rows must be excluded from normal search results. The
-   * endpoint should also hide communities with non-null disabled_at from
-   * promotion surfaces per business rules.
+   * Search sub-communities using the community_platform_communities table,
+   * which stores immutable name, name_key (normalized CI uniqueness), category,
+   * optional description, optional logo_uri/banner_uri, timestamps (created_at,
+   * updated_at, last_active_at), and deleted_at for visibility control. The API
+   * excludes records where deleted_at is set. Name-based ranking is performed
+   * according to business rules: exact case-insensitive match of name, then
+   * starts-with, then token containment, then fuzzy proximity, with
+   * tie-breakers on created_at desc then id desc. GIN trigram indexes on name
+   * and description support efficient matching as indicated by the schema
+   * indices.
    *
-   * Ranking and sorting: Provide two primary modes. Name Match (default) orders
-   * by similarity to the query against the name field, breaking ties by more
-   * recent created_at and then larger id. Recently Created orders strictly by
-   * created_at desc with a deterministic tiebreaker by id. Page size is
-   * typically 20 with load-more. Category facets are supported by joining
-   * community_platform_categories where useful for filters; categories carry
-   * fields such as code, name, active, and display_order.
+   * Security and access: This endpoint is public (no authentication required)
+   * and returns only non-deleted communities. Readers may also require per-item
+   * flags like isMember for the current user, which can be computed when
+   * authentication is present but does not change the public accessibility of
+   * the search itself.
    *
-   * Validation and business logic: Enforce minimum query length of 2
-   * characters. Accept optional filters such as category, active category
-   * enforcement, and disabled status exclusion in accordance with platform
-   * policy. The response should include essential summary fields such as
-   * community name (/c/{name}), description snippet, category label, and member
-   * count computed from community_platform_community_memberships if included by
-   * the request DTO.
+   * Database relationships and derived fields: Member count derives from the
+   * number of rows in community_platform_community_members referencing the
+   * target community with deleted_at null. Rules can be shown from
+   * community_platform_community_rules (top 5 by order_index) when the client
+   * chooses to display them in detail views. Sorting options include nameMatch
+   * (ranking as above) and recentlyCreated which orders by created_at desc and
+   * then id desc. Reserved name handling and name immutability are enforced at
+   * the application layer; uniqueness is maintained by name_key at the database
+   * level.
    *
-   * Related endpoints: Use community detail retrieval and feed endpoints for
-   * deeper browsing. Search is publicly accessible and read-only, intended for
-   * exploration and discovery.
+   * Validation and business logic: The request validates that the query is at
+   * least 2 characters after normalization (trim, case-insensitive,
+   * diacritics-insensitive, hyphen/underscore as separators). Pagination uses a
+   * 20-item page size with an opaque cursor derived from the active sort’s
+   * ordering tuple to maintain deterministic continuation. Deleted communities
+   * (deleted_at not null) are excluded, and deletion cascades remove dependent
+   * entities from visibility (posts and memberships) due to onDelete: Cascade
+   * on relations.
+   *
+   * Related operations: Often used with Explore pages or Community detail
+   * retrieval by name. Error handling includes 400 for too-short queries
+   * (“Please enter at least 2 characters.”) and 5xx for transient failures (“A
+   * temporary error occurred. Please try again in a moment.”).
    *
    * @param connection
-   * @param body Search query, sorting (Name Match/Recently Created), filters,
-   *   and pagination.
+   * @param body Community search parameters: normalized query, sort
+   *   (nameMatch|recentlyCreated), optional category filter, and cursor
+   *   pagination.
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Patch()
@@ -51,7 +65,7 @@ export class CommunityplatformSearchCommunitiesController {
     body: ICommunityPlatformCommunity.IRequest,
   ): Promise<IPageICommunityPlatformCommunity.ISummary> {
     try {
-      return await patchcommunityPlatformSearchCommunities({
+      return await patchCommunityPlatformSearchCommunities({
         body,
       });
     } catch (error) {

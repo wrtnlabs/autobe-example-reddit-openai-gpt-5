@@ -1,120 +1,109 @@
-import jwt from "jsonwebtoken";
-import { MyGlobal } from "../MyGlobal";
-import typia, { tags } from "typia";
-import { Prisma } from "@prisma/client";
-import { v4 } from "uuid";
-import { toISOStringSafe } from "../util/toISOStringSafe";
 import { HttpException } from "@nestjs/common";
-import { ICommunityPlatformCommunity } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformCommunity";
-import { IPageICommunityPlatformCommunity } from "@ORGANIZATION/PROJECT-api/lib/structures/IPageICommunityPlatformCommunity";
+import { Prisma } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import typia, { tags } from "typia";
+import { v4 } from "uuid";
+import { MyGlobal } from "../MyGlobal";
+import { PasswordUtil } from "../utils/passwordUtil";
+import { toISOStringSafe } from "../utils/toISOStringSafe";
 
-/**
- * Search and paginate communities from Prisma table
- * community_platform_communities for public discovery
- *
- * Provides a filtered, paginated list of public communities. Supports search by
- * name/description, category filtering (by category ID or business code),
- * hiding disabled communities by default, and sorting by created_at,
- * last_active_at, or name. Soft-deleted rows (deleted_at != null) are always
- * excluded. This is a public read endpoint with no authentication.
- *
- * @param props - Request properties
- * @param props.body - Filters, sorting, and pagination parameters
- *   (ICommunityPlatformCommunity.IRequest)
- * @returns Paginated list of community summaries optimized for discovery
- * @throws {HttpException} 400 When invalid sort_by or sort_dir is provided
- *   (should be pre-validated by DTO)
- */
-export async function patchcommunityPlatformCommunities(props: {
+import { ICommunityPlatformCommunity } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformCommunity";
+import { IECommunityCategory } from "@ORGANIZATION/PROJECT-api/lib/structures/IECommunityCategory";
+import { IECommunitySort } from "@ORGANIZATION/PROJECT-api/lib/structures/IECommunitySort";
+import { IPageICommunityPlatformCommunity } from "@ORGANIZATION/PROJECT-api/lib/structures/IPageICommunityPlatformCommunity";
+import { IPage } from "@ORGANIZATION/PROJECT-api/lib/structures/IPage";
+
+export async function patchCommunityPlatformCommunities(props: {
   body: ICommunityPlatformCommunity.IRequest;
 }): Promise<IPageICommunityPlatformCommunity.ISummary> {
   const { body } = props;
 
-  // Defaults for pagination and sorting
-  const page = body.page ?? 1;
-  const limit = body.limit ?? 20;
-  const sortBy = body.sort_by ?? "created_at";
-  const sortDir = body.sort_dir ?? "desc";
+  // Pagination limit with defaults and bounds [1, 100]
+  const limit: number = Math.max(1, Math.min(100, Number(body.limit ?? 20)));
 
-  // Build where condition with strict null/undefined checks for required fields
+  // Build WHERE condition (soft-delete aware) – allowed exception for readability
   const whereCondition = {
     deleted_at: null,
-    // Hide disabled communities by default unless explicitly included
-    ...(body.include_disabled === true ? {} : { disabled_at: null }),
-    // Category ID filter (required field in schema → exclude null explicitly)
-    ...(body.community_platform_category_id !== undefined &&
-      body.community_platform_category_id !== null && {
-        community_platform_category_id: body.community_platform_category_id,
+    ...(body.category !== undefined &&
+      body.category !== null && {
+        category: body.category,
       }),
-    // Category business code via relation
-    ...(body.category_code !== undefined &&
-      body.category_code !== null && {
-        category: { code: body.category_code },
-      }),
-    // Text search on name/description
-    ...(body.query !== undefined &&
-      body.query !== null && {
+    ...(body.q !== undefined &&
+      body.q !== null &&
+      body.q.trim().length >= 2 && {
         OR: [
-          { name: { contains: body.query } },
-          { description: { contains: body.query } },
+          { name: { contains: body.q } },
+          { description: { contains: body.q } },
         ],
       }),
   };
 
-  // Determine orderBy inline ensuring stability with id tie-breaker
-  const orderBy = (() => {
-    if (sortBy === "last_active_at") {
-      return [
-        { last_active_at: sortDir === "asc" ? "asc" : "desc" },
-        { id: "asc" },
-      ];
-    }
-    if (sortBy === "name") {
-      return [{ name: sortDir === "asc" ? "asc" : "desc" }, { id: "asc" }];
-    }
-    // Default: created_at
-    return [{ created_at: sortDir === "asc" ? "asc" : "desc" }, { id: "asc" }];
-  })();
-
-  const skip = (Number(page) - 1) * Number(limit);
-  const take = Number(limit);
-
-  const [rows, total] = await Promise.all([
-    MyGlobal.prisma.community_platform_communities.findMany({
-      where: whereCondition,
-      orderBy,
-      skip,
-      take,
-      select: {
-        id: true,
-        name: true,
-        community_platform_category_id: true,
-        logo: true,
-        created_at: true,
-        last_active_at: true,
-      },
-    }),
+  // Fetch total count and current slice in parallel
+  const [total, rows] = await Promise.all([
     MyGlobal.prisma.community_platform_communities.count({
       where: whereCondition,
     }),
+    MyGlobal.prisma.community_platform_communities.findMany({
+      where: whereCondition,
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+      take: limit,
+      skip: 0,
+      select: {
+        id: true,
+        name: true,
+        category: true,
+        description: true,
+        logo_uri: true,
+        last_active_at: true,
+        created_at: true,
+      },
+    }),
   ]);
 
+  // Compute member counts for listed communities
+  const ids = rows.map((r) => r.id);
+  const countsMap = new Map<string, number>();
+  if (ids.length > 0) {
+    const grouped =
+      await MyGlobal.prisma.community_platform_community_members.groupBy({
+        by: ["community_platform_community_id"],
+        where: {
+          community_platform_community_id: { in: ids },
+          deleted_at: null,
+        },
+        _count: { _all: true },
+      });
+    for (const g of grouped)
+      countsMap.set(g.community_platform_community_id, g._count._all);
+  }
+
+  // Map to DTO summaries
   const data = rows.map((row) => ({
-    id: row.id,
+    id: row.id as string & tags.Format<"uuid">,
     name: row.name,
-    community_platform_category_id: row.community_platform_category_id,
-    logo: row.logo ?? null,
-    created_at: toISOStringSafe(row.created_at),
-    last_active_at: toISOStringSafe(row.last_active_at),
+    category: row.category as IECommunityCategory,
+    description:
+      row.description === null
+        ? null
+        : (row.description as string & tags.MaxLength<500>),
+    logoUrl:
+      row.logo_uri === null
+        ? null
+        : (row.logo_uri as string & tags.Format<"uri">),
+    memberCount: countsMap.get(row.id) ?? 0,
+    createdAt: toISOStringSafe(row.created_at),
+    lastActiveAt: row.last_active_at
+      ? toISOStringSafe(row.last_active_at)
+      : null,
   }));
 
-  return {
-    pagination: {
-      current: Number(page),
-      limit: Number(limit),
-      records: total,
-      pages: Math.ceil(total / Number(limit)),
-    },
-    data,
+  // Pagination block (cursorless; current page fixed to 0)
+  const pagination = {
+    current: 0,
+    limit: Number(limit),
+    records: total,
+    pages: total === 0 ? 0 : Math.ceil(total / Number(limit)),
   };
+
+  return { pagination, data };
 }

@@ -1,8 +1,8 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedBody, TypedParam } from "@nestia/core";
 import typia, { tags } from "typia";
-import { patchcommunityPlatformPosts } from "../../../providers/patchcommunityPlatformPosts";
-import { getcommunityPlatformPostsPostId } from "../../../providers/getcommunityPlatformPostsPostId";
+import { patchCommunityPlatformPosts } from "../../../providers/patchCommunityPlatformPosts";
+import { getCommunityPlatformPostsPostId } from "../../../providers/getCommunityPlatformPostsPostId";
 
 import { IPageICommunityPlatformPost } from "../../../api/structures/IPageICommunityPlatformPost";
 import { ICommunityPlatformPost } from "../../../api/structures/ICommunityPlatformPost";
@@ -10,41 +10,46 @@ import { ICommunityPlatformPost } from "../../../api/structures/ICommunityPlatfo
 @Controller("/communityPlatform/posts")
 export class CommunityplatformPostsController {
   /**
-   * List/search posts (community_platform_posts) with pagination and sorting.
+   * Search and paginate post summaries from community_platform_posts using
+   * deterministic Newest/Top ordering.
    *
-   * Return a filtered, paginated list of posts using the
-   * community_platform_posts entity as the primary source. The Prisma schema
-   * includes trigram indexes on title and body to support efficient text
-   * matching. Business constraints from the requirements define the search and
-   * sorting behavior: queries match words in titles and bodies; sorting
-   * supports Newest (order by created_at descending; if equal, larger
-   * identifier first) and Top (order by score derived from
-   * community_platform_post_votes as up−down; ties by more recent created_at,
-   * then by larger identifier). Items not publicly accessible (records with
-   * non-null deleted_at) are excluded from results.
+   * This operation lists posts from community_platform_posts with advanced
+   * search/sort capabilities aligned to the product’s deterministic rules. The
+   * posts table stores the core fields (title, body, author_display_name,
+   * created_at, updated_at) and references community_platform_communities and
+   * community_platform_users via foreign keys. Trigram indexes on title and
+   * body support efficient text matching when queries are provided. Sorting by
+   * Newest must use the tuple (created_at desc, id desc). Sorting by Top
+   * requires computing score as upvotes minus downvotes using
+   * community_platform_post_votes and then applying the tie-breakers
+   * (created_at desc, id desc) when scores are equal.
    *
-   * Security and access: Reading posts is allowed for all users, including
-   * guests. This endpoint is public and does not require authentication.
-   * Sensitive author information is not exposed beyond what is stored for
-   * presentation (e.g., author_display_name). Ownership rules do not limit read
-   * access.
+   * Security considerations follow the platform’s read-open model: anyone can
+   * read public posts without authentication. Implementations may still look up
+   * the authenticated user to provide per-user signals like myVote, but
+   * authorization is not required for basic listing. The endpoint is read-only
+   * and does not modify data in any table. Business logic should exclude posts
+   * that are not visible per product policies and maintain stable cursor
+   * pagination across repeated requests.
    *
-   * Data model and relationships: Each post belongs to one community
-   * (community_platform_communities) and optionally references an author
-   * (community_platform_users, nullable to support anonymization). Votes are
-   * stored in community_platform_post_votes and may be aggregated for Top
-   * sorting. The request body (ICommunityPlatformPost.IRequest) should include
-   * pagination controls, optional community filter, search query (length ≥ 2
-   * characters to execute), and sort selector. The response returns a paginated
-   * page of post summaries suitable for feeds and result lists.
+   * The request body ICommunityPlatformPost.IRequest typically includes
+   * optional filters such as community name, a free-text query for title/body
+   * matching, a sort parameter (newest or top), and pagination properties
+   * (cursor, limit with a default of 20). The response
+   * IPageICommunityPlatformPost.ISummary returns page-level metadata (e.g.,
+   * next cursor) and a compact list of post summaries suitable for cards,
+   * including fields like community name, title, author label, created
+   * timestamp, derived score, and visible comment counts.
    *
-   * Related endpoints: Use GET /communityPlatform/posts/{postId} to retrieve a
-   * specific post. Use POST /communityPlatform/communityMember/posts or POST
-   * /communityPlatform/communityMember/communities/{communityId}/posts for
-   * creation flows.
+   * Error handling covers invalid parameters (e.g., unsupported sort or
+   * malformed cursor) and transient read failures. Providers should map short
+   * queries to appropriate validation messages where search is enabled and
+   * apply tie-breakers exactly as defined to avoid duplicates or gaps between
+   * consecutive pages.
    *
    * @param connection
-   * @param body Search, filter, sort, and pagination parameters for posts
+   * @param body Filtering, search, sorting, and pagination parameters for post
+   *   listing.
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Patch()
@@ -53,7 +58,7 @@ export class CommunityplatformPostsController {
     body: ICommunityPlatformPost.IRequest,
   ): Promise<IPageICommunityPlatformPost.ISummary> {
     try {
-      return await patchcommunityPlatformPosts({
+      return await patchCommunityPlatformPosts({
         body,
       });
     } catch (error) {
@@ -63,33 +68,34 @@ export class CommunityplatformPostsController {
   }
 
   /**
-   * Get a single post (community_platform_posts) by ID.
+   * Get a single post (community_platform_posts) by UUID with score and comment
+   * count.
    *
-   * Retrieve a single post resource from community_platform_posts by its ID.
-   * According to the Prisma schema, posts have required title and body,
-   * optional author_display_name, belong to a community
-   * (community_platform_community_id), and may have a nullable author_user_id
-   * (to support anonymization). The operation returns full details for display
-   * in post detail screens.
+   * This operation retrieves one post from community_platform_posts identified
+   * by its primary key id. The table defines author and community relationships
+   * via foreign keys to community_platform_users and
+   * community_platform_communities. Core columns include title, body, optional
+   * author_display_name, created_at, and updated_at—used for detail display and
+   * deterministic ordering in lists elsewhere.
    *
-   * Security and permissions: This is a public read operation; no
-   * authentication is required. Records that are not publicly accessible (e.g.,
-   * where deleted_at is set) are not returned. Ownership constraints do not
-   * affect reads here, but apply to updates/deletes via separate endpoints.
+   * Security model is read-open: all users, including guests, may retrieve
+   * public post content. Implementations may optionally tailor fields such as
+   * the caller’s current vote state by consulting community_platform_post_votes
+   * for the (post, user) pair. The provider computes score as upvotes minus
+   * downvotes from community_platform_post_votes and counts visible comments
+   * from community_platform_comments for display. If the post is not found or
+   * not eligible for display, the provider returns a not-found outcome
+   * consistent with platform rules.
    *
-   * Data relationships and behavior: The post references
-   * community_platform_communities and community_platform_users (author).
-   * Voting and comments are separate entities and not directly altered by this
-   * read. For Global Latest sidebar behavior or aggregated counters, clients
-   * may rely on separate materialized views or related endpoints as needed.
-   *
-   * Related endpoints: Use PATCH /communityPlatform/posts for listing/searching
-   * posts with pagination. Use POST /communityPlatform/communityMember/posts or
-   * POST /communityPlatform/communityMember/communities/{communityId}/posts for
-   * creation flows.
+   * Error handling includes validation of the postId format (UUID), not-found
+   * for missing records, and generic temporary error mapping when underlying
+   * reads fail. This endpoint returns a full post representation
+   * ICommunityPlatformPost to support Post Detail rendering, including nested
+   * objects such as community basics and author label for UI use.
    *
    * @param connection
-   * @param postId Unique identifier of the target post (UUID)
+   * @param postId Target post identifier (UUID) referencing
+   *   community_platform_posts.id.
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Get(":postId")
@@ -98,7 +104,7 @@ export class CommunityplatformPostsController {
     postId: string & tags.Format<"uuid">,
   ): Promise<ICommunityPlatformPost> {
     try {
-      return await getcommunityPlatformPostsPostId({
+      return await getCommunityPlatformPostsPostId({
         postId,
       });
     } catch (error) {

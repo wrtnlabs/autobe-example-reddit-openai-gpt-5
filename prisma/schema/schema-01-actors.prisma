@@ -1,0 +1,208 @@
+/// Core user accounts for authentication, authorship, and ownership across
+/// the platform. Stores credentials, unique identifiers, and profile basics.
+/// Sessions and all content entities in other components link to {@link
+/// community_platform_users} for authorship and access control.
+/// Case-insensitive uniqueness for email/username is enforced at the
+/// database level via normalized columns.
+///
+/// @namespace Actors
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_users {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Email address provided by the user. Human-readable form; not used for
+  /// case-insensitive uniqueness enforcement directly.
+  email String
+  
+  /// Lowercased canonical email used to enforce case-insensitive uniqueness at
+  /// the database level.
+  email_normalized String
+  
+  /// Preferred handle shown in UIs. Human-readable form; not used for CI
+  /// uniqueness directly.
+  username String
+  
+  /// Lowercased canonical username used to enforce case-insensitive uniqueness
+  /// at the database level.
+  username_normalized String
+  
+  /// Password hash for authentication. Plain passwords are never stored.
+  password_hash String
+  
+  /// Optional display name shown on posts/comments if provided; otherwise UI
+  /// may render "Anonymous" per business rules.
+  display_name String?
+  
+  /// Timestamp of the most recent successful login, used for account analytics
+  /// and security review.
+  last_login_at DateTime?
+  
+  /// Creation timestamp for audit and ordering.
+  created_at DateTime
+  
+  /// Last update timestamp for audit.
+  updated_at DateTime
+  
+  /// Soft delete timestamp. When set, the account is considered deactivated
+  /// and hidden from normal operations.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  community_platform_guestvisitors community_platform_guestvisitors?
+  community_platform_registeredmembers community_platform_registeredmembers?
+  community_platform_siteadmins community_platform_siteadmins?
+  community_platform_sessions community_platform_sessions[]
+  community_platform_communities community_platform_communities[]
+  community_platform_community_members community_platform_community_members[]
+  community_platform_recent_communities community_platform_recent_communities[]
+  community_platform_posts community_platform_posts[]
+  community_platform_post_votes community_platform_post_votes[]
+  community_platform_comments community_platform_comments[]
+  community_platform_comment_votes community_platform_comment_votes[]
+  
+  @@unique([email_normalized])
+  @@unique([username_normalized])
+  @@index([created_at])
+  @@index([last_login_at])
+}
+
+/// User restriction assignment table representing account-level limitations
+/// such as read-only or suspended states for a given {@link
+/// community_platform_users} account. This table does not model
+/// unauthenticated guests; instead, it records enforcement states for
+/// authenticated accounts with auditability (assigned/revoked, optional
+/// expiry, and reason).
+///
+/// @namespace Actors
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_guestvisitors {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Restricted account's {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Type of restriction applied. Expected values: "read_only" or "suspended"
+  /// (future-safe for additional types).
+  restriction_type String
+  
+  /// Optional expiry time for the restriction. Null means until explicitly
+  /// revoked.
+  restricted_until DateTime?
+  
+  /// Optional human-readable reason or policy reference for the restriction.
+  restriction_reason String?
+  
+  /// Time when the restriction was assigned.
+  assigned_at DateTime
+  
+  /// Time when the restriction was revoked; null means currently active.
+  revoked_at DateTime?
+  
+  /// Creation timestamp for audit and ordering.
+  created_at DateTime
+  
+  /// Last update timestamp for audit.
+  updated_at DateTime
+  
+  /// Soft delete timestamp for the restriction record.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_user_id])
+  @@index([created_at])
+  @@index([restricted_until])
+}
+
+/// Role assignment table marking a {@link community_platform_users} account
+/// as an active registered member with write capabilities (post, comment,
+/// vote, join/leave). Serves as the canonical indicator of member state for
+/// authorization and personalization.
+///
+/// @namespace Actors
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_registeredmembers {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Member account's {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Time when the user became a registered member.
+  registered_at DateTime
+  
+  /// Creation timestamp for audit and ordering.
+  created_at DateTime
+  
+  /// Last update timestamp for audit.
+  updated_at DateTime
+  
+  /// Soft delete timestamp for the membership record (e.g., deactivated
+  /// membership).
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_user_id], map: "community_platform_registeredmembers_community_platfor_261797d5")
+  @@index([created_at])
+}
+
+/// Role assignment table granting administrative privileges to a {@link
+/// community_platform_users} account. Records grant and optional revocation
+/// timestamps for audit and compliance.
+///
+/// @namespace Actors
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_siteadmins {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Administrator account's {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Time when administrative privileges were granted.
+  granted_at DateTime
+  
+  /// Time when administrative privileges were revoked; null means currently
+  /// active.
+  revoked_at DateTime?
+  
+  /// Creation timestamp for audit and ordering.
+  created_at DateTime
+  
+  /// Last update timestamp for audit.
+  updated_at DateTime
+  
+  /// Soft delete timestamp for the admin assignment record.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_user_id])
+  @@index([created_at])
+}

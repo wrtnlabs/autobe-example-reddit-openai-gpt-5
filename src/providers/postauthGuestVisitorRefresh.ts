@@ -1,189 +1,190 @@
-import jwt from "jsonwebtoken";
-import { MyGlobal } from "../MyGlobal";
-import typia, { tags } from "typia";
-import { Prisma } from "@prisma/client";
-import { v4 } from "uuid";
-import { toISOStringSafe } from "../util/toISOStringSafe";
 import { HttpException } from "@nestjs/common";
-import { ICommunityPlatformGuestVisitorRefresh } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformGuestVisitorRefresh";
-import { ICommunityPlatformGuestVisitor } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformGuestVisitor";
+import { Prisma } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import typia, { tags } from "typia";
+import { v4 } from "uuid";
+import { MyGlobal } from "../MyGlobal";
+import { PasswordUtil } from "../utils/passwordUtil";
+import { toISOStringSafe } from "../utils/toISOStringSafe";
 
-/**
- * Refresh guest JWT tokens linked to community_platform_guestvisitors without
- * using user sessions.
- *
- * This endpoint validates a guest refresh token, updates the corresponding
- * guest visitor's last_seen_at, and returns a new access token (and the current
- * refresh token) bundled in IAuthorizationToken. It does not use
- * community_platform_sessions.
- *
- * Security:
- *
- * - Verifies the refresh token (issuer: "autobe").
- * - Ensures the token payload represents a guest visitor (type: "guestVisitor").
- * - Computes expirations from JWT claims or sensible fallbacks.
- *
- * @param props - Request properties
- * @param props.body - Refresh request containing the refresh token and optional
- *   client context
- * @returns Authorized guest payload with rotated access (and refresh token
- *   retained) and metadata
- * @throws {HttpException} 401 Unauthorized when token is invalid/expired or
- *   subject missing
- * @throws {HttpException} 404 Not Found when the guest visitor does not exist
- */
-export async function postauthGuestVisitorRefresh(props: {
-  body: ICommunityPlatformGuestVisitorRefresh.IRequest;
+import { ICommunityPlatformGuestVisitor } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformGuestVisitor";
+import { IClientContext } from "@ORGANIZATION/PROJECT-api/lib/structures/IClientContext";
+import { IAuthorizationToken } from "@ORGANIZATION/PROJECT-api/lib/structures/IAuthorizationToken";
+import { ICommunityPlatformUser } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformUser";
+
+export async function postAuthGuestVisitorRefresh(props: {
+  body: ICommunityPlatformGuestVisitor.IRefresh;
 }): Promise<ICommunityPlatformGuestVisitor.IAuthorized> {
   const { body } = props;
 
-  // 1) Verify and decode the refresh token
-  let decodedUnknown: unknown;
-  try {
-    decodedUnknown = (jwt as any).verify(
-      body.refresh_token,
-      MyGlobal.env.JWT_SECRET_KEY,
-      { issuer: "autobe" },
-    );
-  } catch {
-    throw new HttpException(
-      "Unauthorized: Invalid or expired refresh token",
-      401,
-    );
+  // Acquire plaintext token from body; if missing, reject (header/cookie handling is out of scope here)
+  const presentedToken: string | undefined = body.token;
+  if (!presentedToken) {
+    throw new HttpException("Unauthorized: Missing token context", 401);
   }
 
-  if (typeof decodedUnknown !== "object" || decodedUnknown === null) {
-    throw new HttpException(
-      "Unauthorized: Malformed refresh token payload",
-      401,
-    );
-  }
-  const decoded = decodedUnknown as Record<string, unknown>;
-  if (typeof decoded.id !== "string" || decoded.type !== "guestVisitor") {
-    throw new HttpException(
-      "Unauthorized: Refresh token subject mismatch",
-      401,
-    );
-  }
-  const guestId = decoded.id as string & tags.Format<"uuid">;
-
-  // 2) Ensure the guest exists and update last_seen_at (and optional ip/ua)
-  const now = toISOStringSafe(new Date());
-
-  // Fetch minimal to compute payload later (device_fingerprint may be used)
-  const existing =
-    await MyGlobal.prisma.community_platform_guestvisitors.findUnique({
-      where: { id: guestId },
-      select: {
-        id: true,
-        device_fingerprint: true,
-        user_agent: true,
-        ip: true,
-        first_seen_at: true,
-        last_seen_at: true,
-      },
-    });
-  if (!existing)
-    throw new HttpException("Not Found: Guest visitor not found", 404);
-
-  const updated = await MyGlobal.prisma.community_platform_guestvisitors.update(
-    {
-      where: { id: guestId },
-      data: {
-        last_seen_at: now,
-        updated_at: now,
-        user_agent: body.user_agent === undefined ? undefined : body.user_agent,
-        ip: body.ip === undefined ? undefined : body.ip,
-      },
-      select: {
-        id: true,
-        device_fingerprint: true,
-        user_agent: true,
-        ip: true,
-        first_seen_at: true,
-        last_seen_at: true,
-      },
-    },
+  // Current timestamps
+  const now: string & tags.Format<"date-time"> = toISOStringSafe(new Date());
+  const oneHourLater: string & tags.Format<"date-time"> = toISOStringSafe(
+    new Date(Date.now() + 60 * 60 * 1000),
+  );
+  const sevenDaysLater: string & tags.Format<"date-time"> = toISOStringSafe(
+    new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
   );
 
-  // 3) Generate new access token with SAME payload structure (GuestvisitorPayload)
-  const accessPayload = {
-    id: updated.id as string & tags.Format<"uuid">,
-    type: "guestVisitor" as const,
-    ...(updated.device_fingerprint !== null && {
-      device_fingerprint: updated.device_fingerprint,
-    }),
-    ...(updated.user_agent !== null && { user_agent: updated.user_agent }),
-    ...(updated.ip !== null && { ip: updated.ip }),
-    first_seen_at: toISOStringSafe(updated.first_seen_at),
-    last_seen_at: toISOStringSafe(updated.last_seen_at),
+  // Try to decode JWT to extract user id (guestvisitor payload). If fails, fallback to opaque token verification.
+  let candidateUserId: (string & tags.Format<"uuid">) | undefined;
+  try {
+    const decoded: unknown = jwt.verify(
+      presentedToken,
+      MyGlobal.env.JWT_SECRET_KEY,
+      {
+        issuer: "autobe",
+      },
+    );
+    if (
+      typeof decoded === "object" &&
+      decoded !== null &&
+      (decoded as Record<string, unknown>).type === "guestvisitor" &&
+      typeof (decoded as Record<string, unknown>).id === "string"
+    ) {
+      candidateUserId = (decoded as { id: string }).id as string &
+        tags.Format<"uuid">;
+    }
+  } catch {
+    // Ignore JWT verification failure; will try opaque session token path below
+  }
+
+  // Locate session: prefer by user if available; otherwise verify against recent active sessions
+  const findActiveSessionByUser = async (
+    userId: string & tags.Format<"uuid">,
+  ) => {
+    const sessions = await MyGlobal.prisma.community_platform_sessions.findMany(
+      {
+        where: {
+          community_platform_user_id: userId,
+          revoked_at: null,
+          deleted_at: null,
+          expires_at: { gte: now },
+        },
+        orderBy: { updated_at: "desc" },
+        take: 50,
+        include: { user: true },
+      },
+    );
+    for (const s of sessions) {
+      const ok = await PasswordUtil.verify(presentedToken, s.hashed_token);
+      if (ok) return s;
+    }
+    return null;
   };
 
-  const accessToken = (jwt as any).sign(
-    accessPayload,
-    MyGlobal.env.JWT_SECRET_KEY,
-    {
-      expiresIn: "1h",
-      issuer: "autobe",
-    },
-  );
+  const findActiveSessionGlobally = async () => {
+    const sessions = await MyGlobal.prisma.community_platform_sessions.findMany(
+      {
+        where: {
+          revoked_at: null,
+          deleted_at: null,
+          expires_at: { gte: now },
+        },
+        orderBy: { updated_at: "desc" },
+        take: 100,
+        include: { user: true },
+      },
+    );
+    for (const s of sessions) {
+      const ok = await PasswordUtil.verify(presentedToken, s.hashed_token);
+      if (ok) return s;
+    }
+    return null;
+  };
 
-  // Compute access token expiry from its payload (exp seconds)
-  const accessDecoded = (jwt as any).decode(accessToken) as Record<
-    string,
-    unknown
-  > | null;
-  const expired_at: string & tags.Format<"date-time"> =
-    accessDecoded &&
-    typeof accessDecoded === "object" &&
-    typeof accessDecoded.exp === "number"
-      ? toISOStringSafe(new Date((accessDecoded.exp as number) * 1000))
-      : toISOStringSafe(new Date(Date.now() + 60 * 60 * 1000));
+  let session = candidateUserId
+    ? await findActiveSessionByUser(candidateUserId)
+    : await findActiveSessionGlobally();
 
-  // 4) Keep the same refresh token (no rotation); compute refreshable_until
-  let refreshable_until: string & tags.Format<"date-time">;
-  if (typeof decoded.exp === "number") {
-    refreshable_until = toISOStringSafe(new Date(decoded.exp * 1000));
-  } else {
-    // Fallback to 7 days from now when exp is absent
-    refreshable_until = toISOStringSafe(
-      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  if (!session) {
+    throw new HttpException(
+      "Unauthorized: Invalid or expired session token",
+      401,
     );
   }
 
-  // 5) (Optional) Audit log for observability
-  try {
-    await MyGlobal.prisma.community_platform_audit_logs.create({
-      data: {
-        id: v4() as string & tags.Format<"uuid">,
-        guestvisitor_id: updated.id as string & tags.Format<"uuid">,
-        event_type: "guest_refresh",
-        success: true,
-        ip: body.ip ?? updated.ip ?? undefined,
-        user_agent: body.user_agent ?? updated.user_agent ?? undefined,
-        created_at: now,
-        updated_at: now,
-      },
-    });
-  } catch {
-    // Non-fatal: do not block refresh flow on audit logging failure
+  // Ensure owning user is valid and not deactivated
+  if (session.user.deleted_at !== null) {
+    throw new HttpException("Unauthorized: User is deactivated", 401);
   }
 
-  // 6) Build response
+  // Prepare rotation if requested
+  const shouldRotate: boolean = body.rotate === true;
+  const payload = {
+    id: session.community_platform_user_id as string & tags.Format<"uuid">,
+    type: "guestvisitor" as const,
+  };
+
+  const accessToken: string = jwt.sign(payload, MyGlobal.env.JWT_SECRET_KEY, {
+    expiresIn: "1h",
+    issuer: "autobe",
+  });
+
+  const refreshToken: string = shouldRotate
+    ? jwt.sign(
+        { ...payload, tokenType: "refresh" },
+        MyGlobal.env.JWT_SECRET_KEY,
+        {
+          expiresIn: "7d",
+          issuer: "autobe",
+        },
+      )
+    : presentedToken;
+
+  // Update session with new timestamps and optionally rotate hashed_token
+  await MyGlobal.prisma.community_platform_sessions.update({
+    where: { id: session.id },
+    data: {
+      last_seen_at: now,
+      expires_at: oneHourLater,
+      updated_at: now,
+      user_agent: body.client?.userAgent ?? undefined,
+      ip: body.client?.ip ?? undefined,
+      client_platform: body.client?.clientPlatform ?? undefined,
+      client_device: body.client?.clientDevice ?? undefined,
+      session_type: body.client?.sessionType ?? undefined,
+      hashed_token: shouldRotate
+        ? await PasswordUtil.hash(refreshToken)
+        : undefined,
+    },
+  });
+
+  // Optionally touch user's last_login_at
+  await MyGlobal.prisma.community_platform_users.update({
+    where: { id: session.community_platform_user_id },
+    data: { last_login_at: now, updated_at: now },
+  });
+
+  // Build response user summary (non-sensitive)
+  const userSummary: ICommunityPlatformUser.ISummary = {
+    id: session.user.id as string & tags.Format<"uuid">,
+    username: session.user.username,
+    email: session.user.email,
+    display_name: session.user.display_name ?? null,
+    last_login_at: session.user.last_login_at
+      ? toISOStringSafe(session.user.last_login_at)
+      : null,
+    created_at: toISOStringSafe(session.user.created_at),
+    updated_at: now,
+  };
+
+  const token: IAuthorizationToken = {
+    access: accessToken,
+    refresh: refreshToken,
+    expired_at: oneHourLater,
+    refreshable_until: sevenDaysLater,
+  };
+
   return {
-    id: updated.id as string & tags.Format<"uuid">,
-    first_seen_at: toISOStringSafe(updated.first_seen_at),
-    last_seen_at: toISOStringSafe(updated.last_seen_at),
-    token: {
-      access: accessToken,
-      refresh: body.refresh_token,
-      expired_at,
-      refreshable_until,
-    },
-    guestVisitor: {
-      id: updated.id as string & tags.Format<"uuid">,
-      first_seen_at: toISOStringSafe(updated.first_seen_at),
-      last_seen_at: toISOStringSafe(updated.last_seen_at),
-    },
+    id: session.community_platform_user_id as string & tags.Format<"uuid">,
+    token,
+    user: userSummary,
   };
 }

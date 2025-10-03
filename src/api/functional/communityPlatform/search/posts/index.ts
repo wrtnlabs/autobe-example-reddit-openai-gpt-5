@@ -7,42 +7,58 @@ import { ICommunityPlatformPost } from "../../../../structures/ICommunityPlatfor
 import { IPageICommunityPlatformPost } from "../../../../structures/IPageICommunityPlatformPost";
 
 /**
- * Search posts by title/body with pagination and sorting
- * (community_platform_posts).
+ * Search posts (community_platform_posts) with sorting and cursor pagination.
  *
- * This operation provides a search surface over community_platform_posts.
- * According to the schema, posts contain title (5–120 chars), body (10–10,000
- * chars), optional author_display_name, and timestamps (created_at/updated_at),
- * with a logical deletion timestamp deleted_at. The endpoint should match words
- * against title and body and exclude posts where deleted_at is not null. When
- * applicable, posts associated to communities with a non-null disabled_at
- * should be hidden from promotion surfaces; search implementations commonly
- * exclude such content.
+ * Search public posts using text matching against the title and body columns of
+ * community_platform_posts, returning paginated results suitable for the Posts
+ * tab in global search. The underlying Prisma models define posts with fields
+ * including id (UUID), title, body, author_display_name, created_at,
+ * updated_at, and deleted_at. The posts table is indexed for search with GIN
+ * trigram indexes on title and body, and Newest ordering is supported via
+ * combined indexes on (created_at, id). This API excludes records where
+ * deleted_at is not null to align with visibility rules described in the schema
+ * comments.
  *
- * Sorting and pagination: The default sort is Newest, ordering by created_at
- * desc and using a deterministic tiebreaker by id when timestamps match.
- * Optionally support a Top sort that orders by computed score (upvotes −
- * downvotes via community_platform_post_votes), then by more recent created_at,
- * and then by larger id for ties. Page size is typically 20 with load-more
- * behavior; clients provide pagination cursors or page/index as defined by the
- * request DTO.
+ * Security and access: This endpoint is public and requires no authentication.
+ * Reading is open to everyone, consistent with the business rules.
+ * Authorization checks are unnecessary for read-only search results. Standard
+ * copy and error handling apply for validation failures and temporary errors,
+ * but no sensitive data is exposed. Rate limiting and abuse prevention can be
+ * applied at the platform layer.
  *
- * Validation and business rules: Enforce minimum query length of 2 characters;
- * shorter queries should return a validation-style outcome per product copy
- * guidelines. Filtering can include community scoping, author scoping, date
- * ranges, and score thresholds if present in the request DTO. Results return
- * lightweight post summaries optimized for list display (community name, title,
- * author display name, relative time, comment count, score) while the
- * authoritative data remains in the posts and related tables.
+ * Database relationships: While results come from community_platform_posts,
+ * this operation may expose related data commonly shown in cards (e.g.,
+ * community name via community_platform_communities and author display name via
+ * community_platform_users fields). Score is computed from
+ * community_platform_post_votes by aggregating value (+1 for upvote, −1 for
+ * downvote) for each post while ignoring votes with deleted_at set. No score
+ * column exists in the posts table—scores are derived on the fly. For Top
+ * sorting, items are ordered by score desc, then by created_at desc, and
+ * finally by id desc when previous keys tie. For Newest, items are ordered by
+ * created_at desc and then id desc.
  *
- * Related endpoints: Use community feeds or home feeds for non-search listing,
- * and use post detail retrieval (not defined here) to fetch the full post.
- * Error handling follows standard patterns and the search should be publicly
- * accessible for unauthenticated users.
+ * Validation and business logic: The request enforces a minimum query length of
+ * 2 characters after normalization (trim/diacritics-insensitive, treat
+ * hyphen/underscore as token separators) and applies AND semantics across
+ * tokens with a prefix match allowed for the final token. Sorting supports
+ * sort=newest|top with Newest as the default. Pagination follows the platform’s
+ * 20-item page size using an opaque cursor derived from the sort key tuple to
+ * guarantee deterministic continuation without duplicates. Items with
+ * deleted_at set are excluded, and post visibility respects community deletion
+ * by virtue of cascading relationships (posts belong to
+ * community_platform_communities with onDelete: Cascade).
+ *
+ * Related operations and behaviors: Clients often use this endpoint alongside
+ * search endpoints for communities and comments, and may also fetch post detail
+ * by id for a specific result. Tie-breaker consistency must match the Sorting
+ * and Pagination rules: (created_at desc, id desc) for Newest and (score desc,
+ * created_at desc, id desc) for Top. Error handling should surface “Please
+ * enter at least 2 characters.” for short queries (400) and “A temporary error
+ * occurred. Please try again in a moment.” for transient issues (5xx).
  *
  * @param props.connection
- * @param props.body Search query, sorting (Newest/Top), and pagination settings
- *   for posts.
+ * @param props.body Search criteria for posts including query, sort
+ *   (newest|top), and cursor-based pagination (limit defaults to 20).
  * @path /communityPlatform/search/posts
  * @accessor api.functional.communityPlatform.search.posts.index
  * @autobe Generated by AutoBE - https://github.com/wrtnlabs/autobe
@@ -72,8 +88,8 @@ export async function index(
 export namespace index {
   export type Props = {
     /**
-     * Search query, sorting (Newest/Top), and pagination settings for
-     * posts.
+     * Search criteria for posts including query, sort (newest|top), and
+     * cursor-based pagination (limit defaults to 20).
      */
     body: ICommunityPlatformPost.IRequest;
   };

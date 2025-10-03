@@ -1,13 +1,12 @@
-/// Primary entity representing a public sub-community (e.g., /c/ai). Stores
-/// immutable unique name, optional metadata (description, logo, banner),
-/// categorization, and lifecycle state. Owned by a user from {@link
-/// community_platform_users}. Related ordered rules are stored in {@link
-/// community_platform_community_rules}. Memberships are recorded in {@link
-/// community_platform_community_memberships}. Recent per-user activity is
-/// tracked in {@link community_platform_recent_communities}. The name is
-/// immutable after creation (enforced in application logic). "disabled_at"
-/// indicates a non-destructive administrative disablement (no new
-/// posts/comments, hidden from promotion surfaces).
+/// Sub-community definitions with immutable unique name, single category,
+/// optional branding (logo/banner), and community description. Each
+/// community is owned by a creator account ({@link
+/// community_platform_users}) and may display a Right Sidebar "Community
+/// Info + Rules". This revision adds a normalized case-insensitive key
+/// (name_key) to enforce uniqueness at the database layer and clarifies safe
+/// deletion behavior for the creator reference. Category remains a text
+/// field per portability; application enforces allowed values and
+/// reserved-name rules.
 ///
 /// @namespace Communities
 /// @author AutoBE - https://github.com/wrtnlabs/autobe
@@ -18,66 +17,72 @@ model community_platform_communities {
   /// Primary Key.
   id String @id
   
-  /// Owner account's {@link community_platform_users.id}.
+  /// Creator (owner) account's {@link community_platform_users.id}.
   community_platform_user_id String
   
-  /// Assigned category's {@link community_platform_categories.id}.
-  community_platform_category_id String
-  
-  /// Unique community identifier (3–32 chars, letters, digits, hyphen,
-  /// underscore). Must be case-insensitively unique service-wide.
+  /// Community's display/URL name (immutable post-creation at application
+  /// layer). Formatting and reserved names are enforced by the application.
   name String
   
-  /// Optional human-readable description for the community.
+  /// Lowercased, normalized name used to enforce case-insensitive uniqueness
+  /// (e.g., lower(name) with separator normalization). Must be kept in sync
+  /// with name by the application.
+  name_key String
+  
+  /// Single selected category for discovery. Allowed set documented by
+  /// business rules; enforced at application layer.
+  category String
+  
+  /// Short community description (≤ 500 chars). Optional; used in right
+  /// sidebar and search snippets.
   description String?
   
-  /// Optional logo image URI for the community.
-  logo String?
+  /// Optional logo image URI for the community header and cards. Defaults
+  /// handled at application layer when absent.
+  logo_uri String?
   
-  /// Optional banner image URI for the community.
-  banner String?
+  /// Optional banner image URI for the community page. Defaults handled at
+  /// application layer when absent.
+  banner_uri String?
   
-  /// Timestamp of the most recent activity relevant to the community
-  /// (post/comment/join/leave). Used for display and sorting in explore views.
-  last_active_at DateTime
+  /// Optional last active timestamp for the community (updated on posting,
+  /// commenting, or other qualifying activities). Used for info box and
+  /// discovery ordering.
+  last_active_at DateTime?
   
-  /// When set, the community is disabled by administrators; new posts/comments
-  /// are blocked and the community is hidden from promotion surfaces.
-  disabled_at DateTime?
-  
-  /// Creation timestamp.
+  /// Creation timestamp for auditing and Newest ordering.
   created_at DateTime
   
-  /// Last update timestamp.
+  /// Last update timestamp for auditing; application-managed.
   updated_at DateTime
   
-  /// Soft deletion timestamp. Null when active.
+  /// Soft deletion timestamp for visibility control and compliance workflows.
+  /// Null when active.
   deleted_at DateTime?
   
   //----
   // RELATIONS
   //----
-  owner community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
-  category community_platform_categories @relation(fields: [community_platform_category_id], references: [id], onDelete: Cascade)
+  creator community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
   
   community_platform_community_rules community_platform_community_rules[]
-  community_platform_community_memberships community_platform_community_memberships[]
+  community_platform_community_members community_platform_community_members[]
   community_platform_recent_communities community_platform_recent_communities[]
   community_platform_posts community_platform_posts[]
-  mv_community_platform_global_latest_posts mv_community_platform_global_latest_posts[]
-  community_platform_admin_actions community_platform_admin_actions[]
-  community_platform_audit_logs community_platform_audit_logs[]
   
-  @@unique([name])
-  @@index([community_platform_category_id, created_at], map: "community_platform_communities_community_platform_cate_9158780f")
+  @@unique([name_key])
+  @@index([created_at, id])
+  @@index([category, created_at])
+  @@index([last_active_at])
   @@index([community_platform_user_id, created_at], map: "community_platform_communities_community_platform_user_7b817dee")
 }
 
-/// Ordered list of short rule items authored by the community owner to set
-/// participation expectations. Each record belongs to a {@link
-/// community_platform_communities} and includes a stable order_index to
-/// control display order. Managed via community settings; not independently
-/// searched.
+/// Ordered short rules associated with a community. These items appear in
+/// the "Community Rules" section (top 5 by order) on Community Home and Post
+/// Detail. Each rule belongs to exactly one community ({@link
+/// community_platform_communities}). Text is concise (≤ ~100 chars). Rules
+/// are managed through the parent community and are not independently
+/// primary entities.
 ///
 /// @namespace Communities
 /// @author AutoBE - https://github.com/wrtnlabs/autobe
@@ -91,21 +96,22 @@ model community_platform_community_rules {
   /// Belonged community's {@link community_platform_communities.id}.
   community_platform_community_id String
   
-  /// Display order (1-based or 0-based as defined by application). Unique per
-  /// community to preserve deterministic ordering.
+  /// Display order within the community. Starts at 1 and increases without
+  /// gaps per business rules; used to render the top 5 rules.
   order_index Int
   
-  /// Rule text content (1–200 characters). Display may truncate; stored text
-  /// remains intact.
+  /// Rule text content (~≤ 100 characters). Rendered as numbered list; long
+  /// values may be truncated in UI.
   text String
   
-  /// Creation timestamp of this rule item.
+  /// Creation timestamp of the rule item.
   created_at DateTime
   
-  /// Last update timestamp of this rule item.
+  /// Last update timestamp of the rule item.
   updated_at DateTime
   
-  /// Soft deletion timestamp. Null when active.
+  /// Optional soft deletion timestamp for removal while preserving history;
+  /// null when active.
   deleted_at DateTime?
   
   //----
@@ -115,96 +121,4 @@ model community_platform_community_rules {
   
   @@unique([community_platform_community_id, order_index], map: "community_platform_community_rules_community_platform__88f3703e")
   @@index([community_platform_community_id, created_at], map: "community_platform_community_rules_community_platform__5226c2a2")
-}
-
-/// Junction table capturing membership between a user {@link
-/// community_platform_users} and a community {@link
-/// community_platform_communities}. Drives personalization (Home feed
-/// inclusion) and enables quick checks of join state. Each user may have at
-/// most one membership per community. Soft deletion (deleted_at) records
-/// leave time; active memberships have deleted_at = null.
-///
-/// @namespace Communities
-/// @author AutoBE - https://github.com/wrtnlabs/autobe
-model community_platform_community_memberships {
-  //----
-  // COLUMNS
-  //----
-  /// Primary Key.
-  id String @id
-  
-  /// Joined community's {@link community_platform_communities.id}.
-  community_platform_community_id String
-  
-  /// Member user's {@link community_platform_users.id}.
-  community_platform_user_id String
-  
-  /// Membership creation timestamp (join time).
-  created_at DateTime
-  
-  /// Last update timestamp (e.g., for auditing).
-  updated_at DateTime
-  
-  /// Soft deletion timestamp (leave time). Null when active.
-  deleted_at DateTime?
-  
-  //----
-  // RELATIONS
-  //----
-  community community_platform_communities @relation(fields: [community_platform_community_id], references: [id], onDelete: Cascade)
-  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
-  
-  community_platform_audit_logs community_platform_audit_logs[]
-  
-  @@unique([community_platform_community_id, community_platform_user_id], map: "community_platform_community_memberships_community_pla_0c43e162")
-  @@index([community_platform_user_id, created_at], map: "community_platform_community_memberships_community_pla_471baee7")
-  @@index([community_platform_community_id, created_at], map: "community_platform_community_memberships_community_pla_0d7e261a")
-  @@index([community_platform_community_id, community_platform_user_id, deleted_at], map: "community_platform_community_memberships_community_pla_32638b5d")
-}
-
-/// Per-user recency tracker for communities interacted with or visited.
-/// Maintains up to 5 communities by most recent activity for each user.
-/// Supports quick rendering of the left sidebar list. Not a source of truth
-/// for membership but often correlated with {@link
-/// community_platform_community_memberships}.
-///
-/// @namespace Communities
-/// @author AutoBE - https://github.com/wrtnlabs/autobe
-model community_platform_recent_communities {
-  //----
-  // COLUMNS
-  //----
-  /// Primary Key.
-  id String @id
-  
-  /// The user's {@link community_platform_users.id}.
-  community_platform_user_id String
-  
-  /// Related community's {@link community_platform_communities.id}.
-  community_platform_community_id String
-  
-  /// Timestamp of the most recent eligible activity involving this user and
-  /// community (visit, post, comment, vote, join/leave). Used to order the
-  /// top-5 list.
-  last_activity_at DateTime
-  
-  /// Creation timestamp.
-  created_at DateTime
-  
-  /// Last update timestamp.
-  updated_at DateTime
-  
-  /// Soft deletion timestamp. Null when active.
-  deleted_at DateTime?
-  
-  //----
-  // RELATIONS
-  //----
-  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
-  community community_platform_communities @relation(fields: [community_platform_community_id], references: [id], onDelete: Cascade)
-  
-  @@index([community_platform_community_id], map: "community_platform_recent_communities_community_platfo_8cc3b9b6")
-  
-  @@unique([community_platform_user_id, community_platform_community_id], map: "community_platform_recent_communities_community_platfo_b402534c")
-  @@index([community_platform_user_id, last_activity_at], map: "community_platform_recent_communities_community_platfo_c2f01753")
 }

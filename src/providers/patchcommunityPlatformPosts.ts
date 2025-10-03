@@ -1,282 +1,271 @@
-import jwt from "jsonwebtoken";
-import { MyGlobal } from "../MyGlobal";
-import typia, { tags } from "typia";
-import { Prisma } from "@prisma/client";
-import { v4 } from "uuid";
-import { toISOStringSafe } from "../util/toISOStringSafe";
 import { HttpException } from "@nestjs/common";
-import { ICommunityPlatformPost } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformPost";
-import { IPageICommunityPlatformPost } from "@ORGANIZATION/PROJECT-api/lib/structures/IPageICommunityPlatformPost";
+import { Prisma } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import typia, { tags } from "typia";
+import { v4 } from "uuid";
+import { MyGlobal } from "../MyGlobal";
+import { PasswordUtil } from "../utils/passwordUtil";
+import { toISOStringSafe } from "../utils/toISOStringSafe";
 
-/**
- * List/search posts (community_platform_posts) with pagination and sorting.
- *
- * Returns a filtered, paginated list of post summaries. Supports free-text
- * search across title and body (min length 2), optional community filter, and
- * canonical sorting:
- *
- * - Newest: created_at desc, then id desc
- * - Top: score (up - down) desc; ties by created_at desc, then id desc
- *
- * Records with non-null deleted_at are excluded. Optionally excludes posts from
- * disabled communities when exclude_disabled_communities !== false. Public
- * endpoint: no authentication required.
- *
- * @param props - Request properties
- * @param props.body - Search, filter, sort, and pagination parameters
- * @returns Paginated page of post summaries
- * @throws {HttpException} 400 when search query is provided but shorter than 2
- *   characters
- */
-export async function patchcommunityPlatformPosts(props: {
+import { ICommunityPlatformPost } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformPost";
+import { IEPostSort } from "@ORGANIZATION/PROJECT-api/lib/structures/IEPostSort";
+import { IPageICommunityPlatformPost } from "@ORGANIZATION/PROJECT-api/lib/structures/IPageICommunityPlatformPost";
+import { IPage } from "@ORGANIZATION/PROJECT-api/lib/structures/IPage";
+import { ICommunityRef } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityRef";
+import { IECommunityCategory } from "@ORGANIZATION/PROJECT-api/lib/structures/IECommunityCategory";
+import { IUserRef } from "@ORGANIZATION/PROJECT-api/lib/structures/IUserRef";
+import { ICommunityPlatformUser } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformUser";
+import { IEVoteState } from "@ORGANIZATION/PROJECT-api/lib/structures/IEVoteState";
+
+export async function patchCommunityPlatformPosts(props: {
   body: ICommunityPlatformPost.IRequest;
 }): Promise<IPageICommunityPlatformPost.ISummary> {
-  const { body } = props;
+  /**
+   * List post summaries with deterministic sorting (newest/top).
+   *
+   * @param props - Request with q, sort, limit
+   * @returns Page of post summaries
+   */
+  const input = props.body;
 
-  // Validate search length when provided
-  const rawQuery = body.search ?? undefined;
-  const trimmed =
-    rawQuery !== undefined && rawQuery !== null ? rawQuery.trim() : undefined;
-  if (trimmed !== undefined && trimmed.length > 0 && trimmed.length < 2) {
+  // limit handling (default 20)
+  const limit = Number(input.limit ?? 20);
+  if (!Number.isFinite(limit) || limit <= 0) {
     throw new HttpException(
-      "Bad Request: search query must be at least 2 characters",
+      "Bad Request: limit must be a positive number",
       400,
     );
   }
-  if (trimmed === "") {
+
+  // sort handling (default newest)
+  const sort: IEPostSort = input.sort ?? ("newest" as const);
+  if (sort !== "newest" && sort !== "top") {
+    throw new HttpException("Bad Request: unsupported sort mode", 400);
+  }
+
+  // validate q minimal length when provided
+  if (
+    input.q !== undefined &&
+    input.q !== null &&
+    input.q.length > 0 &&
+    input.q.length < 2
+  ) {
     throw new HttpException(
-      "Bad Request: search query must be at least 2 characters",
+      "Bad Request: q must be at least 2 characters",
       400,
     );
   }
 
-  // Pagination defaults/sanitization
-  const requestedPage = Number(body.page ?? 1);
-  const requestedLimit = Number(body.limit ?? 20);
-  const page = Number(requestedPage > 0 ? requestedPage : 1);
-  const limit = Number(requestedLimit > 0 ? requestedLimit : 20);
-  const skip = (page - 1) * limit;
-
-  const excludeDisabled = body.exclude_disabled_communities !== false;
-
-  // Base where condition (soft-deleted excluded)
+  // where condition (soft-deleted excluded, optional text search)
   const whereCondition = {
     deleted_at: null,
-    ...(body.community_id !== undefined && {
-      community_platform_community_id: body.community_id,
-    }),
-    ...(excludeDisabled && {
-      community: { disabled_at: null },
-    }),
-    ...(trimmed && {
-      OR: [{ title: { contains: trimmed } }, { body: { contains: trimmed } }],
-    }),
-  } as const;
-
-  // Total count with same filters
-  const total = await MyGlobal.prisma.community_platform_posts.count({
-    where: whereCondition,
-  });
-
-  // Helper to compute comment counts for a set of post IDs
-  const computeCommentCounts = async (
-    ids: (string & tags.Format<"uuid">)[],
-  ): Promise<Record<string, number>> => {
-    if (ids.length === 0) return {};
-    const grouped = await MyGlobal.prisma.community_platform_comments.groupBy({
-      by: ["community_platform_comment_id"],
-    });
-    // Correct groupBy over comments
-    const byPost = await MyGlobal.prisma.community_platform_comments.groupBy({
-      by: ["community_platform_post_id"],
-      where: {
-        community_platform_post_id: { in: ids },
-        deleted_at: null,
-      },
-      _count: { _all: true },
-    });
-    const map: Record<string, number> = {};
-    for (const row of byPost)
-      map[row.community_platform_post_id] = row._count._all;
-    return map;
+    ...(input.q !== undefined && input.q !== null && input.q !== ""
+      ? {
+          OR: [
+            { title: { contains: input.q } },
+            { body: { contains: input.q } },
+          ],
+        }
+      : {}),
   };
 
-  // Helper to compute vote score (up - down) for a set of post IDs
-  const computeScores = async (
-    ids: (string & tags.Format<"uuid">)[],
-  ): Promise<Record<string, number>> => {
-    if (ids.length === 0) return {};
-    const byState = await MyGlobal.prisma.community_platform_post_votes.groupBy(
-      {
-        by: ["community_platform_post_id", "state"],
-        where: {
-          community_platform_post_id: { in: ids },
-          deleted_at: null,
-        },
-        _count: { _all: true },
-      },
-    );
-    const scores: Record<string, number> = {};
-    for (const row of byState) {
-      const pid = row.community_platform_post_id as string;
-      const state = String(row.state).toLowerCase();
-      const delta =
-        state === "up" || state === "upvote"
-          ? 1
-          : state === "down" || state === "downvote"
-            ? -1
-            : 0;
-      const prev = scores[pid] ?? 0;
-      scores[pid] = prev + delta * row._count._all;
-    }
-    return scores;
-  };
-
-  // Sorting and data retrieval
-  const sortMode = body.sort ?? "newest";
-
-  if (sortMode === "top") {
-    // Compute scores for all matching posts and sort in application layer
-    const allPosts = await MyGlobal.prisma.community_platform_posts.findMany({
+  try {
+    // total count for pagination
+    const total = await MyGlobal.prisma.community_platform_posts.count({
       where: whereCondition,
-      select: {
-        id: true,
-        created_at: true,
-      },
     });
 
-    if (allPosts.length === 0) {
-      return {
-        pagination: {
-          current: Number(page),
-          limit: Number(limit),
-          records: Number(total),
-          pages: Number(limit > 0 ? Math.ceil(total / limit) : 0),
-        },
-        data: [],
-      };
-    }
+    // Base fields only (avoid relation access type issues)
+    type PostRow = {
+      id: string;
+      title: string;
+      created_at: Date | (string & tags.Format<"date-time">);
+      community_platform_user_id: string;
+      community_platform_community_id: string;
+    };
 
-    const allIds = allPosts.map((p) => p.id as string & tags.Format<"uuid">);
-    const scoreMap = await computeScores(allIds);
+    let baseRows: PostRow[] = [];
 
-    const enriched = allPosts.map((p) => ({
-      id: p.id as string & tags.Format<"uuid">,
-      created_at: p.created_at,
-      score: scoreMap[p.id] ?? 0,
-    }));
-
-    enriched.sort((a, b) => {
-      const s = b.score - a.score;
-      if (s !== 0) return s;
-      const t =
-        (b.created_at as Date).getTime() - (a.created_at as Date).getTime();
-      if (t !== 0) return t;
-      return (b.id as string).localeCompare(a.id as string);
-    });
-
-    const slice = enriched.slice(skip, skip + limit);
-    const pageIds = slice.map((e) => e.id);
-
-    const [rows, commentCounts] = await Promise.all([
-      MyGlobal.prisma.community_platform_posts.findMany({
-        where: { id: { in: pageIds } },
+    if (sort === "newest") {
+      // Direct DB ordering for newest
+      baseRows = await MyGlobal.prisma.community_platform_posts.findMany({
+        where: whereCondition,
+        orderBy: [{ created_at: "desc" }, { id: "desc" }],
+        take: limit,
         select: {
           id: true,
-          community_platform_community_id: true,
-          author_user_id: true,
           title: true,
-          author_display_name: true,
           created_at: true,
-          community: { select: { name: true } },
+          community_platform_user_id: true,
+          community_platform_community_id: true,
         },
-      }),
-      computeCommentCounts(pageIds),
-    ]);
+      });
+    } else {
+      // Compute Top in application (score desc, then created_at desc, id desc)
+      const allRows = await MyGlobal.prisma.community_platform_posts.findMany({
+        where: whereCondition,
+        select: {
+          id: true,
+          title: true,
+          created_at: true,
+          community_platform_user_id: true,
+          community_platform_community_id: true,
+        },
+      });
 
-    const scoreForPage: Record<string, number> = {};
-    for (const e of slice) scoreForPage[e.id] = e.score;
+      const allIds = allRows.map((r) => r.id);
+      const voteGroups =
+        allIds.length === 0
+          ? []
+          : await MyGlobal.prisma.community_platform_post_votes.groupBy({
+              by: ["community_platform_post_id"],
+              where: {
+                community_platform_post_id: { in: allIds },
+                deleted_at: null,
+              },
+              _sum: { value: true },
+            });
+      const scoreMapAll = new Map<string, number>();
+      for (const g of voteGroups)
+        scoreMapAll.set(g.community_platform_post_id, g._sum?.value ?? 0);
 
-    const rowMap = new Map<string, (typeof rows)[number]>();
-    for (const r of rows) rowMap.set(r.id, r);
+      const sorted = [...allRows].sort((a, b) => {
+        const sa = scoreMapAll.get(a.id) ?? 0;
+        const sb = scoreMapAll.get(b.id) ?? 0;
+        if (sa !== sb) return sb - sa; // score desc
+        const ta =
+          a.created_at instanceof Date
+            ? a.created_at.getTime()
+            : new Date(a.created_at).getTime();
+        const tb =
+          b.created_at instanceof Date
+            ? b.created_at.getTime()
+            : new Date(b.created_at).getTime();
+        if (ta !== tb) return tb - ta; // created_at desc
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0; // id desc
+      });
+      baseRows = sorted.slice(0, limit);
+    }
 
-    const ordered = pageIds
-      .map((id) => rowMap.get(id))
-      .filter((v): v is NonNullable<typeof v> => !!v);
+    const postIds = baseRows.map((r) => r.id);
+    const userIds = Array.from(
+      new Set(baseRows.map((r) => r.community_platform_user_id)),
+    );
+    const communityIds = Array.from(
+      new Set(baseRows.map((r) => r.community_platform_community_id)),
+    );
 
-    const data = ordered.map((p) => ({
-      id: p.id as string & tags.Format<"uuid">,
-      community_platform_community_id:
-        p.community_platform_community_id as string & tags.Format<"uuid">,
-      community_name: p.community?.name ?? undefined,
-      author_user_id:
-        p.author_user_id === null
-          ? null
-          : (p.author_user_id as string & tags.Format<"uuid">),
-      title: p.title,
-      author_display_name: p.author_display_name ?? null,
-      created_at: toISOStringSafe(p.created_at),
-      score: scoreForPage[p.id] ?? 0,
-      comment_count: commentCounts[p.id] ?? 0,
-    }));
+    // Aggregates for selected posts
+    const [commentGroups, voteGroupsSelected, users, communities] =
+      await Promise.all([
+        postIds.length === 0
+          ? Promise.resolve([])
+          : MyGlobal.prisma.community_platform_comments.groupBy({
+              by: ["community_platform_post_id"],
+              where: {
+                community_platform_post_id: { in: postIds },
+                deleted_at: null,
+              },
+              _count: { _all: true },
+            }),
+        postIds.length === 0
+          ? Promise.resolve([])
+          : MyGlobal.prisma.community_platform_post_votes.groupBy({
+              by: ["community_platform_post_id"],
+              where: {
+                community_platform_post_id: { in: postIds },
+                deleted_at: null,
+              },
+              _sum: { value: true },
+            }),
+        userIds.length === 0
+          ? Promise.resolve([])
+          : MyGlobal.prisma.community_platform_users.findMany({
+              where: { id: { in: userIds } },
+              select: {
+                id: true,
+                username: true,
+                email: true,
+                display_name: true,
+                last_login_at: true,
+                created_at: true,
+                updated_at: true,
+              },
+            }),
+        communityIds.length === 0
+          ? Promise.resolve([])
+          : MyGlobal.prisma.community_platform_communities.findMany({
+              where: { id: { in: communityIds } },
+              select: { name: true, logo_uri: true, category: true, id: true },
+            }),
+      ]);
 
-    return {
-      pagination: {
-        current: Number(page),
-        limit: Number(limit),
-        records: Number(total),
-        pages: Number(limit > 0 ? Math.ceil(total / limit) : 0),
-      },
-      data,
+    const commentCountMap = new Map<string, number>();
+    for (const g of commentGroups)
+      commentCountMap.set(g.community_platform_post_id, g._count._all);
+    const scoreMap = new Map<string, number>();
+    for (const g of voteGroupsSelected)
+      scoreMap.set(g.community_platform_post_id, g._sum?.value ?? 0);
+
+    const userMap = new Map<string, (typeof users)[number]>();
+    for (const u of users) userMap.set(u.id, u);
+    const communityMap = new Map<string, (typeof communities)[number]>();
+    for (const c of communities) communityMap.set(c.id, c);
+
+    const data: ICommunityPlatformPost.ISummary[] = baseRows.map((row) => {
+      const user = userMap.get(row.community_platform_user_id);
+      const community = communityMap.get(row.community_platform_community_id);
+      if (!user || !community) {
+        throw new HttpException(
+          "Internal Server Error: Dangling references",
+          500,
+        );
+      }
+
+      return {
+        id: row.id as string & tags.Format<"uuid">,
+        community: {
+          name: community.name,
+          logoUrl: community.logo_uri ?? undefined,
+          category: community.category as IECommunityCategory,
+        },
+        title: row.title,
+        author: {
+          id: user.id as string & tags.Format<"uuid">,
+          username: user.username,
+          email: user.email,
+          display_name: user.display_name ?? undefined,
+          last_login_at: user.last_login_at
+            ? toISOStringSafe(user.last_login_at)
+            : undefined,
+          created_at: toISOStringSafe(user.created_at),
+          updated_at: toISOStringSafe(user.updated_at),
+        },
+        createdAt: toISOStringSafe(
+          row.created_at as Date | (string & tags.Format<"date-time">),
+        ),
+        commentCount: Number(commentCountMap.get(row.id) ?? 0) as number &
+          tags.Type<"int32"> &
+          tags.Minimum<0>,
+        score: Number(scoreMap.get(row.id) ?? 0) as number & tags.Type<"int32">,
+      };
+    });
+
+    const pagination: IPage.IPagination = {
+      current: Number(0) as number & tags.Type<"int32"> & tags.Minimum<0>,
+      limit: Number(limit) as number & tags.Type<"int32"> & tags.Minimum<0>,
+      records: Number(total) as number & tags.Type<"int32"> & tags.Minimum<0>,
+      pages: Number(Math.ceil(total / limit)) as number &
+        tags.Type<"int32"> &
+        tags.Minimum<0>,
     };
+
+    return { pagination, data };
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      throw new HttpException(`Database error: ${err.code}`, 500);
+    }
+    if (err instanceof HttpException) throw err;
+    throw new HttpException("Internal Server Error", 500);
   }
-
-  // Default: newest
-  const posts = await MyGlobal.prisma.community_platform_posts.findMany({
-    where: whereCondition,
-    orderBy: [{ created_at: "desc" }, { id: "desc" }],
-    skip,
-    take: limit,
-    select: {
-      id: true,
-      community_platform_community_id: true,
-      author_user_id: true,
-      title: true,
-      author_display_name: true,
-      created_at: true,
-      community: { select: { name: true } },
-    },
-  });
-
-  const ids = posts.map((p) => p.id as string & tags.Format<"uuid">);
-  const [commentCounts, scores] = await Promise.all([
-    computeCommentCounts(ids),
-    computeScores(ids),
-  ]);
-
-  const data = posts.map((p) => ({
-    id: p.id as string & tags.Format<"uuid">,
-    community_platform_community_id:
-      p.community_platform_community_id as string & tags.Format<"uuid">,
-    community_name: p.community?.name ?? undefined,
-    author_user_id:
-      p.author_user_id === null
-        ? null
-        : (p.author_user_id as string & tags.Format<"uuid">),
-    title: p.title,
-    author_display_name: p.author_display_name ?? null,
-    created_at: toISOStringSafe(p.created_at),
-    score: scores[p.id] ?? 0,
-    comment_count: commentCounts[p.id] ?? 0,
-  }));
-
-  return {
-    pagination: {
-      current: Number(page),
-      limit: Number(limit),
-      records: Number(total),
-      pages: Number(limit > 0 ? Math.ceil(total / limit) : 0),
-    },
-    data,
-  };
 }

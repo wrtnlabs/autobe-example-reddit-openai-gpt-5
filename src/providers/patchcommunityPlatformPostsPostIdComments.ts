@@ -1,125 +1,79 @@
-import jwt from "jsonwebtoken";
-import { MyGlobal } from "../MyGlobal";
-import typia, { tags } from "typia";
-import { Prisma } from "@prisma/client";
-import { v4 } from "uuid";
-import { toISOStringSafe } from "../util/toISOStringSafe";
 import { HttpException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import typia, { tags } from "typia";
+import { v4 } from "uuid";
+import { MyGlobal } from "../MyGlobal";
+import { PasswordUtil } from "../utils/passwordUtil";
+import { toISOStringSafe } from "../utils/toISOStringSafe";
+
 import { ICommunityPlatformComment } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformComment";
 import { IPageICommunityPlatformComment } from "@ORGANIZATION/PROJECT-api/lib/structures/IPageICommunityPlatformComment";
+import { IPage } from "@ORGANIZATION/PROJECT-api/lib/structures/IPage";
+import { IECommunityPlatformVoteState } from "@ORGANIZATION/PROJECT-api/lib/structures/IECommunityPlatformVoteState";
+import { ICommunityPlatformUser } from "@ORGANIZATION/PROJECT-api/lib/structures/ICommunityPlatformUser";
 
-/**
- * List/search comments for a post from community_platform_comments
- *
- * Retrieves a paginated list of non-deleted comments for the specified post.
- * Supports filtering by top-level comments or replies of a specific parent,
- * free-text search, date range filters, and canonical Newest ordering
- * (created_at desc; tie-break by id desc).
- *
- * Security: Public read; no authentication required. Soft-deleted comments are
- * excluded.
- *
- * @param props - Request properties
- * @param props.postId - Target post’s UUID to list comments for
- * @param props.body - Search and pagination parameters (parent/top-level
- *   filter, search, range, sort, pagination)
- * @returns Paginated list of comments under the given post
- * @throws {HttpException} 400 When validation fails (invalid sort, paging, or
- *   cross-post parent)
- * @throws {HttpException} 404 When the post does not exist
- */
-export async function patchcommunityPlatformPostsPostIdComments(props: {
+export async function patchCommunityPlatformPostsPostIdComments(props: {
   postId: string & tags.Format<"uuid">;
   body: ICommunityPlatformComment.IRequest;
 }): Promise<IPageICommunityPlatformComment> {
   const { postId, body } = props;
 
-  // Validate sort option (only "Newest" is allowed)
-  if (body.sort !== undefined && body.sort !== "Newest") {
-    throw new HttpException("Bad Request: Unsupported sort option", 400);
-  }
-
-  // Pagination defaults and validation
-  const page = Number(body.page ?? 0);
-  const limit = Number(body.limit ?? 20);
-  if (!Number.isFinite(page) || page < 0) {
-    throw new HttpException(
-      "Bad Request: page must be a non-negative integer",
-      400,
-    );
-  }
-  if (!Number.isFinite(limit) || limit < 1) {
-    throw new HttpException(
-      "Bad Request: limit must be a positive integer",
-      400,
-    );
-  }
-
-  // Ensure target post exists
-  const post = await MyGlobal.prisma.community_platform_posts.findUnique({
-    where: { id: postId },
+  // 1) Validate post exists and is visible (not soft-deleted)
+  const postExists = await MyGlobal.prisma.community_platform_posts.findFirst({
+    where: { id: postId, deleted_at: null },
     select: { id: true },
   });
-  if (!post) {
-    throw new HttpException("Not Found: post does not exist", 404);
-  }
+  if (!postExists) throw new HttpException("Not Found", 404);
 
-  // If parent_id specified (non-null), ensure it belongs to the same post
-  if (body.parent_id !== undefined && body.parent_id !== null) {
-    const parent = await MyGlobal.prisma.community_platform_comments.findFirst({
-      where: {
-        id: body.parent_id,
-        community_platform_post_id: postId,
-      },
-      select: { id: true },
-    });
-    if (!parent) {
-      throw new HttpException(
-        "Bad Request: parent_id does not belong to the specified post or does not exist",
-        400,
-      );
-    }
-  }
+  // 2) Pagination & optional search
+  const take = body.limit ?? 20;
 
-  // Build where condition
-  const whereCondition = {
+  // 3) Build base where (visible comments for the post, optional search)
+  const baseWhere = {
     community_platform_post_id: postId,
     deleted_at: null,
-    // Parent filters: explicit parent_id takes precedence
-    ...(body.parent_id !== undefined
-      ? body.parent_id === null
-        ? { parent_id: null }
-        : { parent_id: body.parent_id }
-      : body.top_level_only === true
-        ? { parent_id: null }
-        : {}),
-    // Full-text (simple) search on content
-    ...(typeof body.query === "string" && body.query.length >= 2
-      ? { content: { contains: body.query } }
-      : {}),
-    // Date range filters
-    ...((body.since !== undefined && body.since !== null) ||
-    (body.until !== undefined && body.until !== null)
-      ? {
-          created_at: {
-            ...(body.since !== undefined && body.since !== null
-              ? { gte: body.since }
-              : {}),
-            ...(body.until !== undefined && body.until !== null
-              ? { lte: body.until }
-              : {}),
-          },
+    ...(body.q !== undefined &&
+      body.q !== null &&
+      body.q.length > 0 && {
+        content: { contains: body.q },
+      }),
+  } as const;
+
+  // 4) Cursor handling: opaque base64 of { createdAt, id }
+  const whereCondition = {
+    ...baseWhere,
+    ...(() => {
+      if (!body.cursor) return {};
+      try {
+        const decoded = Buffer.from(body.cursor, "base64").toString("utf8");
+        const parsed = JSON.parse(decoded) as { createdAt: string; id: string };
+        if (!parsed || !parsed.createdAt || !parsed.id) {
+          throw new Error("Invalid cursor payload");
         }
-      : {}),
+        return {
+          OR: [
+            { created_at: { lt: parsed.createdAt } },
+            {
+              AND: [
+                { created_at: parsed.createdAt },
+                { id: { lt: parsed.id } },
+              ],
+            },
+          ],
+        };
+      } catch {
+        throw new HttpException("Bad Request: Invalid cursor", 400);
+      }
+    })(),
   };
 
-  // Execute list and count in parallel using the same where condition
+  // 5) Fetch page of comments and total count concurrently
   const [rows, total] = await Promise.all([
     MyGlobal.prisma.community_platform_comments.findMany({
       where: whereCondition,
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
-      skip: page * limit,
-      take: limit,
+      take: Number(take),
       select: {
         id: true,
         community_platform_post_id: true,
@@ -128,41 +82,109 @@ export async function patchcommunityPlatformPostsPostIdComments(props: {
         content: true,
         created_at: true,
         updated_at: true,
+        deleted_at: true,
       },
     }),
     MyGlobal.prisma.community_platform_comments.count({
-      where: whereCondition,
+      where: baseWhere,
     }),
   ]);
 
-  // Map to DTO with proper date conversions
-  const data: ICommunityPlatformComment[] = rows.map((r) => ({
-    id: r.id as string & tags.Format<"uuid">,
-    community_platform_post_id: r.community_platform_post_id as string &
-      tags.Format<"uuid">,
-    community_platform_user_id: r.community_platform_user_id as string &
-      tags.Format<"uuid">,
-    parent_id:
-      r.parent_id === null
-        ? null
-        : (r.parent_id as string & tags.Format<"uuid">),
-    content: r.content,
-    created_at: toISOStringSafe(r.created_at),
-    updated_at: toISOStringSafe(r.updated_at),
-  }));
+  // 6) Batch-load scores and authors
+  const commentIds = rows.map((r) => r.id);
+  const authorIds = Array.from(
+    new Set(rows.map((r) => r.community_platform_user_id)),
+  );
 
-  const records = Number(total);
-  const current = Number(page);
-  const size = Number(limit);
-  const pages = size > 0 ? Number(Math.ceil(records / size)) : 0;
+  const [scoreGroups, authors] = await Promise.all([
+    commentIds.length === 0
+      ? Promise.resolve(
+          [] as {
+            community_platform_comment_id: string;
+            _sum: { value: number | null };
+          }[],
+        )
+      : MyGlobal.prisma.community_platform_comment_votes.groupBy({
+          by: ["community_platform_comment_id"],
+          where: {
+            community_platform_comment_id: { in: commentIds },
+            deleted_at: null,
+          },
+          _sum: { value: true },
+        }),
+    authorIds.length === 0
+      ? Promise.resolve(
+          [] as {
+            id: string;
+            username: string;
+            email: string;
+            display_name: string | null;
+            last_login_at: Date | null;
+            created_at: Date;
+            updated_at: Date;
+          }[],
+        )
+      : MyGlobal.prisma.community_platform_users.findMany({
+          where: { id: { in: authorIds } },
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            display_name: true,
+            last_login_at: true,
+            created_at: true,
+            updated_at: true,
+          },
+        }),
+  ]);
 
-  return {
-    pagination: {
-      current,
-      limit: size,
-      records,
-      pages,
-    },
-    data,
+  const scoreMap = new Map<string, number>();
+  for (const g of scoreGroups) {
+    const sum = g._sum.value ?? 0;
+    scoreMap.set(g.community_platform_comment_id, Number(sum));
+  }
+
+  const authorMap = new Map<string, ICommunityPlatformUser.ISummary>();
+  for (const u of authors) {
+    authorMap.set(u.id, {
+      id: u.id as string & tags.Format<"uuid">,
+      username: u.username,
+      email: u.email,
+      display_name: u.display_name ?? null,
+      last_login_at: u.last_login_at ? toISOStringSafe(u.last_login_at) : null,
+      created_at: toISOStringSafe(u.created_at),
+      updated_at: toISOStringSafe(u.updated_at),
+    });
+  }
+
+  // 7) Map to DTO
+  const data: ICommunityPlatformComment[] = rows.map((r) => {
+    const score = scoreMap.get(r.id) ?? 0;
+    const author = authorMap.get(r.community_platform_user_id);
+    return {
+      id: r.id as string & tags.Format<"uuid">,
+      postId: r.community_platform_post_id as string & tags.Format<"uuid">,
+      authorId: r.community_platform_user_id as string & tags.Format<"uuid">,
+      parentId:
+        r.parent_id === null
+          ? null
+          : (r.parent_id as string & tags.Format<"uuid">),
+      content: r.content,
+      createdAt: toISOStringSafe(r.created_at),
+      updatedAt: toISOStringSafe(r.updated_at),
+      deletedAt: null,
+      score: Number(score),
+      ...(author ? { author } : {}),
+    };
+  });
+
+  // 8) Pagination response
+  const pagination: IPage.IPagination = {
+    current: Number(0),
+    limit: Number(take),
+    records: Number(total),
+    pages: Number(Math.ceil((total || 0) / Number(take || 1))),
   };
+
+  return { pagination, data };
 }

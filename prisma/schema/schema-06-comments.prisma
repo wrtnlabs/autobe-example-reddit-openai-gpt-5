@@ -1,0 +1,110 @@
+/// Threaded comments for posts within the community platform. Each comment
+/// belongs to exactly one post ({@link community_platform_posts}) and one
+/// author account ({@link community_platform_users}). Supports hierarchical
+/// replies via self-referencing {@link
+/// community_platform_comments.parent_id}. Implements soft deletion using
+/// deleted_at while preserving thread continuity. Indexed for Newest
+/// ordering using (created_at, id) tuples per post and per parent, and
+/// supports text search via GIN on content.
+///
+/// @namespace Comments
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_comments {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Target post's {@link community_platform_posts.id}. Each comment must
+  /// belong to a post.
+  community_platform_post_id String
+  
+  /// Author account's {@link community_platform_users.id}. Required for
+  /// ownership and permissions.
+  community_platform_user_id String
+  
+  /// Optional parent comment's {@link community_platform_comments.id} for
+  /// nested replies (adjacency list).
+  parent_id String?
+  
+  /// Plain text body of the comment (2–2,000 chars). Line breaks allowed;
+  /// executable code prohibited. Business validation enforced at application
+  /// layer.
+  content String
+  
+  /// Creation timestamp for the comment. Used for Newest ordering and relative
+  /// time rendering.
+  created_at DateTime
+  
+  /// Last modification timestamp for the comment. Reflects edits after
+  /// creation.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp. When set, the comment body is hidden with a
+  /// neutral placeholder while preserving thread position.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  post community_platform_posts @relation(fields: [community_platform_post_id], references: [id], onDelete: Cascade)
+  author community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  parent community_platform_comments? @relation("recursive", fields: [parent_id], references: [id], onDelete: Cascade)
+  
+  recursive community_platform_comments[] @relation("recursive")
+  community_platform_comment_votes community_platform_comment_votes[]
+  
+  @@index([community_platform_post_id, created_at, id], map: "community_platform_comments_community_platform_post_id_bec3833d")
+  @@index([community_platform_post_id, parent_id, created_at, id], map: "community_platform_comments_community_platform_post_id_c65ef51c")
+  @@index([parent_id, created_at, id])
+  @@index([community_platform_user_id, created_at], map: "community_platform_comments_community_platform_user_id_d682cb89")
+}
+
+/// Per-user vote state for comments. Each row records a single effective
+/// vote by a user on a comment ({@link community_platform_comments}) with
+/// value in {-1, 1}. Enforces one vote per (user, comment) via a composite
+/// unique index. Designed as a supporting entity for scoring and ranking
+/// logic.
+///
+/// @namespace Comments
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_comment_votes {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Target comment's {@link community_platform_comments.id}.
+  community_platform_comment_id String
+  
+  /// Voter account's {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Vote value indicating direction. Allowed domain: 1 (upvote) or -1
+  /// (downvote). Application enforces domain and toggling to None by deleting
+  /// the row.
+  value Int
+  
+  /// Vote creation timestamp.
+  created_at DateTime
+  
+  /// Last modification timestamp for the vote (e.g., when switching
+  /// Upvote↔Downvote).
+  updated_at DateTime
+  
+  /// Soft deletion timestamp for audit or recovery scenarios. When set, the
+  /// vote is excluded from tallies by application logic.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  comment community_platform_comments @relation(fields: [community_platform_comment_id], references: [id], onDelete: Cascade)
+  voter community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_user_id, community_platform_comment_id], map: "community_platform_comment_votes_community_platform_us_29662574")
+  @@index([community_platform_comment_id, created_at], map: "community_platform_comment_votes_community_platform_co_68a9b5f7")
+  @@index([community_platform_user_id, created_at], map: "community_platform_comment_votes_community_platform_us_f33e6829")
+}

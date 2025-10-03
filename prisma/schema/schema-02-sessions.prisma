@@ -1,0 +1,80 @@
+/// Authentication sessions for the community platform. Each record
+/// represents a long-lived session tied to a user account for smooth
+/// resume-after-login experiences. Sessions support auditability
+/// (created/updated/last_seen), lifecycle control (expires_at, revoked_at),
+/// and security via hashed token storage (never store plaintext). Belongs to
+/// {@link community_platform_users}. Common operations include listing a
+/// user’s sessions, revoking a specific session, and purging expired
+/// sessions. This table does not store credentials; those reside in users.
+///
+/// @namespace Sessions
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_sessions {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Owner account reference. Target model’s {@link
+  /// community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Secure hash of the session token used to authenticate API requests.
+  /// Plaintext tokens must never be stored.
+  hashed_token String
+  
+  /// User agent string reported by the client at sign-in or most recent
+  /// interaction. Useful for device identification in session management UIs.
+  user_agent String?
+  
+  /// Last observed client IP address for this session. Stored as a string to
+  /// accommodate IPv4/IPv6 textual forms.
+  ip String?
+  
+  /// Optional client platform hint (e.g., OS/Browser summary) for usability
+  /// and security reviews.
+  client_platform String?
+  
+  /// Optional device descriptor (e.g., model or device category) captured
+  /// during session establishment.
+  client_device String?
+  
+  /// Optional logical type for the session (e.g., standard, admin-console) for
+  /// policy or routing purposes. Application-defined values.
+  session_type String?
+  
+  /// Session creation timestamp. Used for relative time displays and audit
+  /// trails.
+  created_at DateTime
+  
+  /// Last updated timestamp for this session record (e.g., metadata changes).
+  updated_at DateTime
+  
+  /// Timestamp of the last authenticated activity using this session. Supports
+  /// long-lived session renewal logic and security review.
+  last_seen_at DateTime?
+  
+  /// Absolute expiration timestamp for the session to satisfy longevity bounds
+  /// (e.g., ≤ 90 days).
+  expires_at DateTime
+  
+  /// Timestamp when the session was revoked. Null means currently not revoked.
+  revoked_at DateTime?
+  
+  /// Soft deletion timestamp for retention or compliance workflows. Null means
+  /// not deleted.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  user community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([hashed_token])
+  @@index([community_platform_user_id, created_at], map: "community_platform_sessions_community_platform_user_id_16631a09")
+  @@index([community_platform_user_id, last_seen_at], map: "community_platform_sessions_community_platform_user_id_1d7af1ef")
+  @@index([revoked_at, expires_at])
+  @@index([expires_at])
+  @@index([community_platform_user_id, revoked_at, expires_at], map: "community_platform_sessions_community_platform_user_id_ece17645")
+}

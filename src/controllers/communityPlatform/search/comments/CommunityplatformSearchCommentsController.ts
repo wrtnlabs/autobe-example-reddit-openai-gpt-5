@@ -1,7 +1,7 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedBody } from "@nestia/core";
 import typia from "typia";
-import { patchcommunityPlatformSearchComments } from "../../../../providers/patchcommunityPlatformSearchComments";
+import { patchCommunityPlatformSearchComments } from "../../../../providers/patchCommunityPlatformSearchComments";
 
 import { IPageICommunityPlatformComment } from "../../../../api/structures/IPageICommunityPlatformComment";
 import { ICommunityPlatformComment } from "../../../../api/structures/ICommunityPlatformComment";
@@ -9,56 +9,50 @@ import { ICommunityPlatformComment } from "../../../../api/structures/ICommunity
 @Controller("/communityPlatform/search/comments")
 export class CommunityplatformSearchCommentsController {
   /**
-   * Search comments (community_platform_comments) with Newest ordering and
-   * paginated results.
+   * Search comments (community_platform_comments) ordered by Newest with cursor
+   * pagination.
    *
-   * This operation retrieves searchable, paginated comments from the community
-   * platform in alignment with the business requirements and the Prisma schema.
-   * It is rooted in the community_platform_comments table, which stores
-   * user-authored comment entities with fields including id (primary key),
-   * community_platform_post_id (post association), community_platform_user_id
-   * (author association), optional parent_id (threading), content (plain-text
-   * body), created_at, updated_at, and deleted_at. Text matching uses the
-   * content column and leverages the defined trigram index (Gin on content) to
-   * support efficient substring and similarity queries.
+   * Search comment content across the community platform using the
+   * community_platform_comments table. The schema defines id (UUID), content
+   * (plain text), optional parent_id for nesting, created_at/updated_at
+   * timestamps, and deleted_at to implement soft deletion. This endpoint
+   * filters out comments where deleted_at is set and can optionally include
+   * author display information and parent post context for result rendering.
+   * Efficient text search is supported via a GIN trigram index on content, and
+   * Newest ordering uses the (created_at, id) tuple indices present on post and
+   * parent scopes.
    *
-   * Security and access follow product rules: reading and searching are open to
-   * all roles, so this endpoint is public. Results must include only comments
-   * that remain visible to the public: comments where deleted_at is null and
-   * whose parent post and community are also available for public consumption
-   * (exclude where post.deleted_at is not null or
-   * community.disabled_at/deleted_at is not null). Implement reasonable rate
-   * limiting or throttling for this search endpoint to mitigate abuse and
-   * protect backend resources.
+   * Security and access: Public endpoint; no authentication is required to read
+   * comment search results. It returns only non-deleted comments and avoids
+   * exposing restricted data. Rate limits and abuse-prevention measures may be
+   * applied at the platform layer.
    *
-   * The operation returns results ordered by the canonical Newest definition
-   * for comments: order by created_at descending; when created_at timestamps
-   * are equal, return the comment with the larger identifier first (effectively
-   * ORDER BY created_at DESC, id DESC). The request body
-   * ICommunityPlatformComment.IRequest encapsulates search criteria such as the
-   * query string (minimum length 2 characters; shorter inputs must not execute
-   * the search and should surface the standard validation message), pagination
-   * controls targeting 20 results per page, and optional post/community
-   * scoping. The response body IPageICommunityPlatformComment.ISummary wraps a
-   * page of summary items optimized for list display, including essential
-   * fields such as comment id, content excerpt, created_at, and minimal
-   * relation hints (post/community identifiers) as defined in the DTO schema.
+   * Database relationships and ordering: Comments belong to posts
+   * (community_platform_posts) and users (community_platform_users); replies
+   * are represented via self-referencing parent_id with onDelete: Cascade.
+   * Ordering is Newest only: order by created_at desc and then id desc for
+   * deterministic tie-breaks. Scores for comments may be computed from
+   * community_platform_comment_votes by aggregating value where deleted_at is
+   * null; however, search ordering does not use score—only Newest is supported
+   * for this endpoint.
    *
-   * This API is closely related to other search endpoints (e.g., posts and
-   * communities) but focuses strictly on comments. Typical usage includes
-   * executing a global search where the client selects the Comments tab and
-   * then calls this endpoint with the user’s query. On error, the
-   * implementation should provide consistent messages for validation failures
-   * (e.g., “Please enter at least 2 characters.”) and handle transient issues
-   * with a retry-friendly response, as specified in the error-handling
-   * requirements. Timestamps should be presented in clients using users’ local
-   * timezones (e.g., Asia/Seoul) with relative formatting, and pagination must
-   * return 20 items per page with stable ordering and no duplicates between
-   * pages.
+   * Validation and business logic: The request enforces a minimum query length
+   * of 2 characters after normalization (trim/diacritics-insensitive;
+   * hyphen/underscore treated as separators). Pagination uses a default page
+   * size of 20 with an opaque cursor derived from (created_at desc, id desc).
+   * Deleted comments and comments whose parent post has been removed (via
+   * cascade) are excluded from results. Error handling follows platform
+   * standards: 400 for queries shorter than 2 characters with the copy “Please
+   * enter at least 2 characters.” and 5xx for transient failures with the copy
+   * “A temporary error occurred. Please try again in a moment.”
+   *
+   * Related operations: Clients often follow up by fetching the associated post
+   * detail and locating the comment within the thread, or by loading the Post
+   * Detail comments endpoint using Newest ordering and per-thread pagination.
    *
    * @param connection
-   * @param body Search constraints and pagination parameters for comment
-   *   retrieval (query ≥ 2 chars, pagination 20 per page).
+   * @param body Comment search parameters with normalized query (≥2 chars) and
+   *   cursor pagination (newest order).
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Patch()
@@ -67,7 +61,7 @@ export class CommunityplatformSearchCommentsController {
     body: ICommunityPlatformComment.IRequest,
   ): Promise<IPageICommunityPlatformComment.ISummary> {
     try {
-      return await patchcommunityPlatformSearchComments({
+      return await patchCommunityPlatformSearchComments({
         body,
       });
     } catch (error) {

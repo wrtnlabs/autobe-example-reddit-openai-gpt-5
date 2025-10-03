@@ -1,71 +1,75 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedParam, TypedBody } from "@nestia/core";
 import typia, { tags } from "typia";
-import { patchcommunityPlatformCommunitiesCommunityIdPosts } from "../../../../providers/patchcommunityPlatformCommunitiesCommunityIdPosts";
+import { patchCommunityPlatformCommunitiesCommunityNamePosts } from "../../../../providers/patchCommunityPlatformCommunitiesCommunityNamePosts";
 
 import { IPageICommunityPlatformPost } from "../../../../api/structures/IPageICommunityPlatformPost";
 import { ICommunityPlatformPost } from "../../../../api/structures/ICommunityPlatformPost";
 
-@Controller("/communityPlatform/communities/:communityId/posts")
+@Controller("/communityPlatform/communities/:communityName/posts")
 export class CommunityplatformCommunitiesPostsController {
   /**
-   * Search and list posts for a community from community_platform_posts with
-   * sorting and pagination.
+   * Search and paginate community posts using community_platform_posts (with
+   * votes for Top).
    *
-   * Retrieve a filtered, sorted, and paginated list of posts from the
-   * community_platform_posts table for a given community. The Prisma schema
-   * defines key columns: id, community_platform_community_id (parent
-   * community), author_user_id (nullable to support account
-   * closure/anonymization), title (5–120 chars business rule), body (10–10,000
-   * chars business rule, plain text), optional author_display_name (0–32
-   * chars), created_at/updated_at, and a deleted_at timestamp for logical
-   * removal from public view. Relationships include references to
-   * community_platform_communities (container), community_platform_users
-   * (author), community_platform_post_votes (for score), and
-   * community_platform_comments (for comment counts).
+   * Provide a paginated, sortable list of posts for the target community. In
+   * the Prisma schema, community_platform_posts contains title, body,
+   * author_display_name, created_at, and updated_at, as well as foreign keys to
+   * community_platform_communities (community scope) and
+   * community_platform_users (author). This operation filters by the target
+   * community resolved from {communityName} and excludes posts that are not
+   * visible by checking deleted_at.
    *
-   * Sorting and search: Implement canonical sorts per requirements—Newest
-   * orders by created_at descending with tie-breakers by larger identifier; Top
-   * orders by higher score first (derived from community_platform_post_votes,
-   * where state indicates up/down), then more recent created_at, then larger
-   * identifier. Title/body matching leverages the schema’s trigram indexes on
-   * title and body. Pagination returns 20 items per page by default, with
-   * deterministic order and no duplicates across pages.
+   * Security considerations: Reading is public; no authentication is required
+   * to fetch community posts. However, if the client supplies an authenticated
+   * context, additional personalization fields like myVote may be included by
+   * application logic using community_platform_post_votes for the calling
+   * user.
    *
-   * Security and visibility: Reading posts is public per platform rules, but
-   * the provider must exclude posts where deleted_at is set and should suppress
-   * content from communities that are administratively disabled (disabled_at)
-   * on promotion surfaces. The author_user_id being nullable requires display
-   * fallbacks (e.g., anonymous attribution) based on business logic; this
-   * listing returns summary fields suitable for feed cards.
+   * Sorting and tie-breakers: When sort=newest, order by created_at descending
+   * and break ties by id descending as per deterministic rules. When sort=top,
+   * compute score from community_platform_post_votes (sum of value), order by
+   * score descending; if scores are equal, order by created_at descending; if
+   * still equal, order by id descending. Pagination cursors must encode the
+   * active sort’s ordering tuple to ensure stable continuation without
+   * duplicates or omissions.
    *
-   * Validation and errors: Validate communityId as a UUID referencing an
-   * existing community. Return 404 for non-existent communities and 400 for
-   * invalid parameters. The request body controls filters, sort selection
-   * (Newest | Top), and pagination cursors/limits.
+   * Validation and business rules: The request body
+   * ICommunityPlatformPost.IRequest includes sort, limit (default 20), and an
+   * opaque cursor string. Implementations should validate the community exists
+   * (community_platform_communities.name_key) and is visible. Title/body length
+   * constraints are enforced at creation/update time, not here.
    *
-   * Related operations: Creation, update, and deletion of posts are separate
-   * endpoints. This operation focuses solely on complex retrieval tailored to
-   * community feeds, built on community_platform_posts and its related
-   * vote/comment aggregates.
+   * Related operations: Use GET /communities/{communityName} for the
+   * community’s details and rules, and GET /posts/{postId} for individual post
+   * detail. Home feed and Global Latest are separate endpoints with their own
+   * scopes.
+   *
+   * Error handling: If the community is not found or not visible, return an
+   * appropriate not-found response. Transient failures should return the
+   * platform’s standardized temporary error message and allow retry.
    *
    * @param connection
-   * @param communityId Target community’s ID
-   *   (community_platform_communities.id)
-   * @param body Filter, search, sort (Newest | Top), and pagination parameters
-   *   for community posts
+   * @param communityName Immutable community name used to resolve
+   *   community_platform_communities (application normalizes to name_key).
+   * @param body Search and pagination parameters: { sort: "newest"|"top",
+   *   cursor?: string, limit?: number (default 20) }. Cursor encodes the active
+   *   sort’s boundary tuple.
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
    */
   @TypedRoute.Patch()
   public async index(
-    @TypedParam("communityId")
-    communityId: string & tags.Format<"uuid">,
+    @TypedParam("communityName")
+    communityName: string &
+      tags.MinLength<3> &
+      tags.MaxLength<30> &
+      tags.Pattern<"^[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])$">,
     @TypedBody()
     body: ICommunityPlatformPost.IRequest,
   ): Promise<IPageICommunityPlatformPost.ISummary> {
     try {
-      return await patchcommunityPlatformCommunitiesCommunityIdPosts({
-        communityId,
+      return await patchCommunityPlatformCommunitiesCommunityNamePosts({
+        communityName,
         body,
       });
     } catch (error) {

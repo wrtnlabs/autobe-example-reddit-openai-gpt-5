@@ -1,0 +1,110 @@
+/// Text-only posts authored by users within a specific community. Serves as
+/// a core content entity for Home feed, Community pages, Post Detail, and
+/// Search. Each post belongs to exactly one community and has exactly one
+/// author (a user). Title and body follow length constraints;
+/// author_display_name is optional and shown as a friendly label (defaults
+/// to "Anonymous" at presentation when empty). Deletion removes posts from
+/// public views; soft deletion timestamp supports operational safeguards.
+/// Relationships: community via {@link community_platform_communities},
+/// author via {@link community_platform_users}, and votes via {@link
+/// community_platform_post_votes}. Author FK uses Restrict on delete to
+/// avoid cascading content removal when accounts are deactivated; community
+/// FK cascades to satisfy community deletion behavior.
+///
+/// @namespace Posts
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_posts {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Belonged community's {@link community_platform_communities.id}.
+  /// Determines the community scope for feeds and permissions.
+  community_platform_community_id String
+  
+  /// Authoring user's {@link community_platform_users.id}. Used for ownership
+  /// (edit/delete) and author guard rules.
+  community_platform_user_id String
+  
+  /// Post title. Business constraints: 5–120 characters, plain text.
+  title String
+  
+  /// Post body (plain text, line breaks allowed). Business constraints:
+  /// 10–10,000 characters; executable content prohibited.
+  body String
+  
+  /// Optional author display name shown on cards/details (0–32 chars). If
+  /// empty, UI shows "Anonymous".
+  author_display_name String?
+  
+  /// Creation timestamp for deterministic Newest ordering and relative time
+  /// display.
+  created_at DateTime
+  
+  /// Last update timestamp for edits (title/body/display name).
+  updated_at DateTime
+  
+  /// Soft deletion timestamp. When set, post is removed from public views
+  /// while preserving operational integrity.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  community community_platform_communities @relation(fields: [community_platform_community_id], references: [id], onDelete: Cascade)
+  author community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  community_platform_post_votes community_platform_post_votes[]
+  community_platform_comments community_platform_comments[]
+  
+  @@index([created_at, id])
+  @@index([community_platform_community_id, created_at, id], map: "community_platform_posts_community_platform_community__cdfd667a")
+  @@index([community_platform_user_id, created_at], map: "community_platform_posts_community_platform_user_id_cr_897aa442")
+}
+
+/// Per-user voting state for posts enabling score computation (upvote=1,
+/// downvote=-1). Each row represents a user’s current vote on a post.
+/// Enforces one vote per user per post. Managed indirectly through post
+/// interactions. Related entities: {@link community_platform_posts} and
+/// {@link community_platform_users}.
+///
+/// @namespace Posts
+/// @author AutoBE - https://github.com/wrtnlabs/autobe
+model community_platform_post_votes {
+  //----
+  // COLUMNS
+  //----
+  /// Primary Key.
+  id String @id
+  
+  /// Target post's {@link community_platform_posts.id}.
+  community_platform_post_id String
+  
+  /// Voting user's {@link community_platform_users.id}.
+  community_platform_user_id String
+  
+  /// Vote value. Allowed values are -1 for downvote and 1 for upvote.
+  /// Transition to None is represented by row removal at application level.
+  value Int
+  
+  /// Vote creation timestamp for audit and ordering purposes.
+  created_at DateTime
+  
+  /// Last update timestamp when vote value changes.
+  updated_at DateTime
+  
+  /// Soft deletion timestamp for operational safety; typically null.
+  deleted_at DateTime?
+  
+  //----
+  // RELATIONS
+  //----
+  post community_platform_posts @relation(fields: [community_platform_post_id], references: [id], onDelete: Cascade)
+  voter community_platform_users @relation(fields: [community_platform_user_id], references: [id], onDelete: Cascade)
+  
+  @@unique([community_platform_post_id, community_platform_user_id], map: "community_platform_post_votes_community_platform_post__786c2464")
+  @@index([community_platform_post_id, created_at], map: "community_platform_post_votes_community_platform_post__80871491")
+  @@index([community_platform_user_id, created_at], map: "community_platform_post_votes_community_platform_user__00277ed4")
+}

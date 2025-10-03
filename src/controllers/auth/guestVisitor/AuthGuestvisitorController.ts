@@ -1,67 +1,75 @@
 import { Controller } from "@nestjs/common";
 import { TypedRoute, TypedBody } from "@nestia/core";
 import typia from "typia";
-import { postauthGuestVisitorJoin } from "../../../providers/postauthGuestVisitorJoin";
-import { postauthGuestVisitorRefresh } from "../../../providers/postauthGuestVisitorRefresh";
+import { postAuthGuestVisitorJoin } from "../../../providers/postAuthGuestVisitorJoin";
+import { postAuthGuestVisitorRefresh } from "../../../providers/postAuthGuestVisitorRefresh";
 
 import { ICommunityPlatformGuestVisitor } from "../../../api/structures/ICommunityPlatformGuestVisitor";
-import { ICommunityPlatformGuestVisitorJoin } from "../../../api/structures/ICommunityPlatformGuestVisitorJoin";
-import { ICommunityPlatformGuestVisitorRefresh } from "../../../api/structures/ICommunityPlatformGuestVisitorRefresh";
 
 @Controller("/auth/guestVisitor")
 export class AuthGuestvisitorController {
   /**
-   * Register or correlate an anonymous visitor and issue initial guest JWT
-   * using community_platform_guestvisitors.
+   * Register guestVisitor in community_platform_users and create session in
+   * community_platform_sessions.
    *
-   * Purpose and functionality: This endpoint creates or reuses an anonymous
-   * visitor identity based on client hints and issues initial JWT tokens for
-   * the guest role. It is backed by the Prisma model
-   * community_platform_guestvisitors which captures device_fingerprint,
-   * user_agent, ip, and tracks first_seen_at and last_seen_at timestamps for
-   * the same visitor. Unlike member or admin flows, there is no lookup in
-   * community_platform_user_credentials and no community_platform_sessions row,
-   * because the visitor is not an authenticated user account.
+   * Purpose and scope: This endpoint registers a temporary guest identity and
+   * issues a session for smooth resume-after-login experiences without full
+   * member credentials. A new account is created in the Prisma model
+   * Actors.community_platform_users using required columns email,
+   * email_normalized, username, username_normalized, and password_hash, with
+   * optional display_name and last_login_at set on successful issuance. The
+   * account timestamps created_at and updated_at are recorded for audit and
+   * ordering. No membership privilege rows are created; specifically,
+   * Actors.community_platform_registeredmembers and
+   * Actors.community_platform_siteadmins remain absent for this account.
    *
-   * Implementation details: On request, the provider will either create a new
-   * row in community_platform_guestvisitors (initializing first_seen_at and
-   * last_seen_at) or update last_seen_at when correlating by device_fingerprint
-   * and/or other hints. The endpoint returns access/refresh tokens encapsulated
-   * in the ICommunityPlatformGuestVisitor.IAuthorized DTO with expiry metadata.
-   * The returned tokens enable guarded actions to trigger the “Please sign in
-   * to continue.” prompt logic and smooth resume as specified in business
-   * requirements.
+   * Implementation details: After creating the user row, the service persists a
+   * session in Sessions.community_platform_sessions with a securely generated
+   * hashed_token (plaintext never stored), an absolute expires_at to satisfy
+   * long-lived session targets, and optional
+   * user_agent/ip/client_platform/client_device metadata. Timestamps
+   * created_at/updated_at are set, and last_seen_at is recorded or initialized.
+   * The session is returned to the client through the authorized response
+   * payload so the UI can proceed with guarded actions that require being
+   * signed in as a guest identity (e.g., preparing to upgrade flow, resuming
+   * blocked actions after prompt).
    *
-   * Role-specific integration and business context: The role is a guest
-   * (non-authenticated), mapped to the guestVisitor capability in the PRD.
-   * Guests can browse public content and search but cannot create posts,
-   * comments, vote, or join/leave. This endpoint exists to start a resumable
-   * session context for guarded flows without elevating to a member account.
+   * Role-specific integration: The guestVisitor role indicates an
+   * unauthenticated browsing state prior to registration. Upon guest join, the
+   * user is represented by the newly created community_platform_users row but
+   * remains a guest (not a registered member). No entries are inserted into
+   * Actors.community_platform_registeredmembers or
+   * Actors.community_platform_siteadmins. Content write permissions remain
+   * restricted per product rules; however, the session enables long-lived
+   * identity for resume-after-login behavior and state continuity.
    *
-   * Security considerations: Since no password or email exists for guests,
-   * identity correlation uses
-   * community_platform_guestvisitors.device_fingerprint, user_agent, and ip
-   * where available. Tokens should be short-lived and scoped for read-only
-   * operations plus guarded-flow resumption, and the service should update
-   * community_platform_guestvisitors.last_seen_at each use to support abuse
-   * detection and analytics via community_platform_audit_logs.guestvisitor_id.
+   * Security considerations: Credentials are not reused from other roles. The
+   * system must honor uniqueness via email_normalized and username_normalized,
+   * and store only password_hash. Session tokens are represented only by
+   * community_platform_sessions.hashed_token, never plaintext. Session expiry
+   * is controlled by community_platform_sessions.expires_at, with renewal
+   * performed via the companion refresh endpoint for this role. Optionally,
+   * last_login_at in community_platform_users can be set to the current
+   * timestamp on successful issuance.
    *
-   * Related operations and workflow: Use this join endpoint first for brand-new
-   * visitors. Later, call /auth/guestVisitor/refresh to rotate tokens using a
-   * valid refresh token. Member/admin authentication flows are intentionally
-   * not exposed here because those map to community_platform_users plus
-   * community_platform_user_credentials and community_platform_sessions, which
-   * do not apply to guests.
+   * Validation and business logic: Minimal validation should respect the
+   * database constraints and uniqueness enforced by email_normalized and
+   * username_normalized. The application may auto-generate ephemeral values to
+   * satisfy required columns in Actors.community_platform_users when the client
+   * does not provide them. On uniqueness conflicts, return a suitable error
+   * according to service conventions. No soft deletion semantics are applied
+   * during creation; deleted_at columns remain null.
    *
-   * Error handling: Return standard authentication errors for malformed
-   * payloads or server-side failures. If client hints are missing, still create
-   * a minimal community_platform_guestvisitors row and proceed. Do not
-   * reference soft deletion semantics in this operation; the guest record
-   * lifecycle is independent of token lifetime.
+   * Related operations and workflow: This join operation is typically followed
+   * by the refresh endpoint for token renewal
+   * (Sessions.community_platform_sessions rotation/extension). There is no
+   * login endpoint for the guestVisitor role by design. Upgrading to
+   * member-level capabilities would be handled by separate role-specific flows
+   * unrelated to this operation.
    *
    * @param connection
-   * @param body Client-provided hints for correlating/creating an anonymous
-   *   visitor (e.g., device fingerprint) and optional context.
+   * @param body Guest join payload (ephemeral identity inputs or empty; server
+   *   may auto-generate required fields).
    * @setHeader token.access Authorization
    *
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
@@ -69,10 +77,10 @@ export class AuthGuestvisitorController {
   @TypedRoute.Post("join")
   public async join(
     @TypedBody()
-    body: ICommunityPlatformGuestVisitorJoin.ICreate,
+    body: ICommunityPlatformGuestVisitor.IJoin,
   ): Promise<ICommunityPlatformGuestVisitor.IAuthorized> {
     try {
-      return await postauthGuestVisitorJoin({
+      return await postAuthGuestVisitorJoin({
         body,
       });
     } catch (error) {
@@ -82,51 +90,58 @@ export class AuthGuestvisitorController {
   }
 
   /**
-   * Refresh guest JWT tokens linked to community_platform_guestvisitors without
-   * using user sessions.
+   * Refresh guestVisitor session by rotating/updating
+   * community_platform_sessions.
    *
-   * Purpose and functionality: This endpoint renews guest access by accepting a
-   * valid refresh token and returning a fresh
-   * ICommunityPlatformGuestVisitor.IAuthorized payload. The underlying visitor
-   * identity is represented by community_platform_guestvisitors with fields
-   * such as device_fingerprint, user_agent, ip, first_seen_at, and
-   * last_seen_at.
+   * Purpose and scope: This endpoint renews guestVisitor authentication by
+   * refreshing a session represented in Prisma by
+   * Sessions.community_platform_sessions. It validates the presented token
+   * (e.g., via a provided refresh token or secure cookie mapped to
+   * community_platform_sessions.hashed_token), ensures the session is not
+   * revoked (revoked_at is null) and not expired beyond renewal policy, and
+   * then rotates or extends the session by updating expires_at and
+   * last_seen_at. The corresponding user record in
+   * Actors.community_platform_users remains unchanged beyond an optional update
+   * to last_login_at.
    *
-   * Implementation details: On successful refresh, the provider should validate
-   * the presented guest refresh token, rotate tokens, and update
-   * community_platform_guestvisitors.last_seen_at to the current time. Because
-   * guests are not real accounts in community_platform_users and do not have
-   * community_platform_user_credentials, no password checks or email
-   * verification occurs here, and community_platform_sessions is not used for
-   * guest flows.
+   * Implementation details: A valid session row is required in
+   * community_platform_sessions. On success, the endpoint may create a new
+   * session record with a new hashed_token or update the existing one depending
+   * on the rotation policy, always avoiding plaintext token storage. The
+   * response returns an authorized structure that clients can use to continue
+   * guarded flows after renewal. The actor’s role remains guest; no rows are
+   * created in Actors.community_platform_registeredmembers or
+   * Actors.community_platform_siteadmins.
    *
-   * Role-specific integration and business context: Guests can continue
-   * browsing and be seamlessly prompted to sign in when attempting guarded
-   * actions. The refresh process aligns with generous session expectations and
-   * smooth re-login behavior outlined in the PRD while remaining distinct from
-   * member/admin session renewal.
+   * Role-specific integration: This operation is specific to the guestVisitor
+   * role and exists because kind is "guest". It complements the guest join flow
+   * by extending long-lived sessions without requiring a member login. It must
+   * enforce the association to Actors.community_platform_users via
+   * community_platform_user_id, ensuring the user has not been deactivated
+   * (e.g., users.deleted_at is null) prior to renewal.
    *
-   * Security considerations: Enforce refresh token validation and expiry, and
-   * scope issued access tokens appropriately for guest capabilities. Track ip
-   * and user_agent where available to support anomaly detection and correlate
-   * with the community_platform_guestvisitors record for analytics, and
-   * optionally emit community_platform_audit_logs entries linked via
-   * guestvisitor_id for observability.
+   * Security considerations: Validate that
+   * community_platform_sessions.revoked_at is null and
+   * community_platform_sessions.expires_at permits renewal. Always store only
+   * the hashed token (community_platform_sessions.hashed_token). Update
+   * last_seen_at to reflect the renewal activity, and set a new expires_at
+   * within platform-defined bounds. Any invalid or expired token should result
+   * in an appropriate unauthorized response per service conventions.
    *
-   * Related operations and workflow: Initial token issuance occurs at
-   * /auth/guestVisitor/join. If the refresh token is invalid, expired, or
-   * revoked, the client should call /auth/guestVisitor/join to obtain a new
-   * token set. This endpoint is intentionally separate from member/admin
-   * /auth/{role}/refresh flows that rely on community_platform_sessions.
+   * Validation and business logic: The refresh request must supply sufficient
+   * token context to locate the session (header/cookie or request body field).
+   * The system must handle race conditions idempotently so the final state
+   * contains exactly one active, non-revoked session for the guest account. No
+   * soft deletion is performed by this operation; deleted_at columns remain
+   * null.
    *
-   * Error handling: Return appropriate authentication errors for
-   * invalid/expired refresh tokens. Do not mention or rely on soft-deletion
-   * behavior; token rotation is independent from any archival settings on guest
-   * data.
+   * Related operations and workflow: Paired with the guestVisitor join
+   * endpoint. There is no login for this role. Member/admin authentication
+   * flows are separate and out of scope here.
    *
    * @param connection
-   * @param body Refresh request containing the current guest refresh token and
-   *   optional client context.
+   * @param body Refresh payload carrying token context to renew the guest
+   *   session.
    * @setHeader token.access Authorization
    *
    * @nestia Generated by Nestia - https://github.com/samchon/nestia
@@ -134,10 +149,10 @@ export class AuthGuestvisitorController {
   @TypedRoute.Post("refresh")
   public async refresh(
     @TypedBody()
-    body: ICommunityPlatformGuestVisitorRefresh.IRequest,
+    body: ICommunityPlatformGuestVisitor.IRefresh,
   ): Promise<ICommunityPlatformGuestVisitor.IAuthorized> {
     try {
-      return await postauthGuestVisitorRefresh({
+      return await postAuthGuestVisitorRefresh({
         body,
       });
     } catch (error) {

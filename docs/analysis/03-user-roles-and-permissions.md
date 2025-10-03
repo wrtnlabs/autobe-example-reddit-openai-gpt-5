@@ -1,244 +1,233 @@
-# 03 — User Roles and Permissions Specification (communityPlatform)
+# User Roles and Permissions — Business Requirements (communityPlatform)
 
-## 1. Scope and Principles
-Business-level requirements for roles, permissions, authentication/session behavior, content ownership, join/leave membership effects, and administrative safeguards. The scope is the observable behavior of the system; implementation details (APIs, database schemas, infrastructure) are intentionally excluded.
+## 1. Scope and Intent
+Defines role catalog, ownership rules, authentication and session experience, permission boundaries, account states, and abuse-prevention expectations in business terms for communityPlatform. Reading is open to everyone; posting, commenting, voting, creating sub-communities, and joining/leaving require login. Requirements use EARS where applicable and avoid technical implementation details (no APIs, schemas, or infrastructure prescriptions).
 
-Guiding principles:
-- Reading is open to everyone.
-- Posting, commenting, voting, creating sub-communities, and joining/leaving require login.
-- Sessions are generously long; on expiry, a smooth re-login resumes the original action.
-- Ownership is account-based; only authors may edit/delete their own posts and comments.
-- Validation is minimal and favors smooth, error-free flows.
-- Optimistic UI provides immediate feedback for votes, joins/leaves, and counters with reconciliation.
+## 2. Role Definitions and Hierarchy
 
-EARS principles:
-- THE communityPlatform SHALL allow anyone to read public communities, posts, comments, and search results without login.
-- THE communityPlatform SHALL require authentication for posting, commenting, voting, creating communities, and joining/leaving.
-- THE communityPlatform SHALL enforce ownership so only authors may edit or delete their own posts and comments.
-- WHEN a session expires during an action, THE communityPlatform SHALL prompt re-login and, upon success, SHALL resume the interrupted action without loss of input.
+### 2.1 Role Catalog
+- guestVisitor
+  - Unauthenticated user; may browse and read all public content, view Global Latest, and use search read-only.
+  - Cannot create, edit, delete, vote, join/leave communities, or create communities.
+- registeredMember
+  - Authenticated user; may create sub-communities, post, comment, vote, and join/leave communities.
+  - May edit or delete only content authored by their own account.
+  - May edit metadata of sub-communities they created and may delete only communities they created (with cascading removal of posts) subject to safeguards.
+- siteAdmin
+  - Platform-wide administrator; may act to satisfy policy/legal obligations and manage content or accounts when necessary.
+  - May remove or edit any content where required for policy, safety, or legal reasons.
 
-## 2. Role Taxonomy and Hierarchy
-### 2.1 Roles
-- guestVisitor: Unauthenticated visitor; can browse and search public content only.
-- communityMember: Authenticated user; can create/manage own posts/comments, vote on others’ content, join/leave communities, and create communities (becoming their owner).
-- systemAdmin: Platform administrator; can execute policy enforcement actions (e.g., disable/delete communities or content). Does not gain authorship rights over others’ content.
+### 2.2 Precedence and Global Principles
+- THE communityPlatform SHALL recognize precedence: siteAdmin > registeredMember > guestVisitor.
+- THE communityPlatform SHALL keep reading of public content available to all roles.
+- THE communityPlatform SHALL require login for posting, commenting, voting, joining/leaving communities, and creating communities.
+- THE communityPlatform SHALL enforce account-based ownership such that only authors may edit or delete their own posts/comments; community creators may edit community metadata; community names are immutable.
+- THE communityPlatform SHALL minimize validation while enforcing essential constraints.
 
-### 2.2 Hierarchy and Scope
-- THE communityPlatform SHALL define a flat role structure with guestVisitor, communityMember, and systemAdmin.
-- WHERE the user is the creator (owner) of a community, THE communityPlatform SHALL grant exclusive rights to edit that community’s metadata and rules; the community name remains immutable.
-- THE communityPlatform SHALL ensure systemAdmin actions do not attribute authorship to systemAdmin for content created by others.
+## 3. Authentication Experience and Session Expectations
 
-EARS statements:
-- THE communityPlatform SHALL allow guestVisitor to read public content and search results.
-- THE communityPlatform SHALL restrict guarded actions (post/comment/vote/create/join/leave) to authenticated users.
-- WHERE the user is the community owner, THE communityPlatform SHALL allow editing of description, logo, banner, rules, and category only; name remains immutable.
+### 3.1 Sign Up and Sign In (Business Outcomes)
+- WHEN a user attempts an action requiring authentication while unauthenticated, THE platform SHALL present a login prompt with the copy “Please sign in to continue.” and, upon successful authentication, SHALL resume the original action without losing user input.
+- WHEN credentials are invalid, THE platform SHALL present “Login failed. Please try again.” and SHALL allow immediate retry.
+- WHERE login succeeds, THE platform SHALL grant access according to the user’s role (registeredMember by default; siteAdmin if applicable).
 
-## 3. Authentication and Session Principles
-### 3.1 Core Authentication Functions (Business-Level)
-- THE communityPlatform SHALL support sign up using an identifier (email or username) and a password with simple policy.
-- THE communityPlatform SHALL support sign in, sign out (current session), and sign out from all devices.
-- THE communityPlatform SHALL support email verification and password reset where enabled by policy.
-- WHEN login is required due to a guarded action, THE communityPlatform SHALL prompt for authentication and, upon success, SHALL resume the original action with preserved input.
+### 3.2 Long Session Targets and Renewal
+- THE session management SHALL provide generous session longevity to minimize re-authentication during normal use.
+- THE session management SHALL renew idle timeout upon authenticated activity (e.g., posting, commenting, voting, joining/leaving, editing/deleting own content).
+- WHILE a session remains valid, THE platform SHALL not prompt for re-authentication.
 
-### 3.2 Token Management (JWT — Business Expectations)
-- THE communityPlatform SHALL use JWT for access and refresh tokens to manage sessions.
-- THE communityPlatform SHALL issue an access token that expires within 15–30 minutes and a refresh token that expires within 7–30 days.
-- THE communityPlatform SHALL include in JWT payload at minimum: userId, role, and a permissions array reflecting effective capabilities at issuance.
-- THE communityPlatform SHALL allow secure token storage using an approach selected by the development team (e.g., httpOnly cookies or localStorage), adhering to platform security best practices.
-- THE communityPlatform SHALL ensure JWT signing keys are managed securely with periodic rotation under development team policy.
-- WHEN an access token expires, THE communityPlatform SHALL attempt non-intrusive renewal using the refresh token; IF renewal fails, THEN THE communityPlatform SHALL prompt smooth re-login and, upon success, SHALL resume the prior action.
+### 3.3 Session Expiry and Resume-After-Login
+- WHEN a session expires during any protected action, THE platform SHALL prompt a smooth re-login without navigating away and, upon success, SHALL resume the interrupted action with preserved inputs.
+- WHEN an unauthenticated user triggers a protected action, THE platform SHALL prompt login and, upon success, SHALL execute the original intent exactly once to avoid duplicates.
+- IF re-login fails, THEN THE platform SHALL present an error and allow retry without losing entered data.
 
-### 3.3 Performance Expectations for Auth
-- WHEN a user submits login credentials, THE communityPlatform SHALL validate and respond within 2 seconds under normal conditions.
-- WHEN a session refresh occurs, THE communityPlatform SHALL complete the refresh within 1 second under normal conditions.
+### 3.4 Logout and Profile Basics
+- WHEN a user logs out, THE platform SHALL end the current device session and return to the same page in read-only state.
+- WHERE a user logs out of all devices, THE platform SHALL end all active sessions and return the current page in read-only state.
+- WHEN logout completes, THE platform SHALL clear unsaved inputs tied to protected actions unless the user explicitly saved a draft.
 
-### 3.4 Guest Guard and Resume (Mermaid)
+## 4. Authorization Rules by Domain
+
+### 4.1 Sub-Communities
+- Creation
+  - THE platform SHALL require login.
+  - THE platform SHALL validate name uniqueness and format (alphanumeric, hyphen, underscore) and require one category from the fixed set.
+  - THE platform SHALL set the creator as the owner and auto-join the creator upon success.
+- Edit
+  - THE platform SHALL allow only the owner (or siteAdmin) to edit description, logo, banner, rules, and category; THE platform SHALL forbid renaming.
+- Delete
+  - THE platform SHALL allow only the owner (or siteAdmin) to delete a community and SHALL remove all posts within it.
+- Join/Leave
+  - THE platform SHALL require login; joining/leaving is idempotent and impacts personalization only.
+  - WHEN toggled, THE platform SHALL update home feed inclusion/exclusion and the Recent Communities list immediately (optimistic UI with server sync).
+
+### 4.2 Posts
+- Composition
+  - THE platform SHALL require a selected target sub-community to publish.
+  - THE platform SHALL enforce title length 5–120 characters and body length 10–10,000 characters; plain text with line breaks only; scripts/code prohibited.
+  - THE platform SHALL accept optional author display name 0–32 characters; where empty, display “Anonymous”.
+- Permissions and Ownership
+  - THE platform SHALL require login to create, edit, or delete.
+  - THE platform SHALL allow only the author (or siteAdmin) to edit/delete.
+  - THE platform SHALL not require community membership to post in that community.
+
+### 4.3 Comments
+- Creation and Structure
+  - THE platform SHALL require login to create, edit, or delete comments.
+  - THE platform SHALL enforce length 2–2,000 characters; plain text; scripts/code prohibited.
+  - THE platform SHALL support nested replies (threaded structure).
+- Ownership and Visibility
+  - THE platform SHALL allow only the author (or siteAdmin) to edit/delete a comment.
+  - THE platform SHALL preserve thread integrity when a comment is removed consistent with platform rules.
+
+### 4.4 Voting
+- THE platform SHALL allow exactly one vote state per user per item (None, Upvote, Downvote) with direct toggling between Upvote and Downvote and pressing the same vote again reverting to None.
+- THE platform SHALL compute item score as upvotes − downvotes.
+- IF a user attempts to vote on their own post or comment, THEN THE platform SHALL block the action and present “You can’t vote on your own posts/comments.”
+
+## 5. Permission Matrix (Business-Level)
+
+| Action (Business) | guestVisitor | registeredMember | siteAdmin |
+|---|---|---|---|
+| Read public communities/posts/comments | ✅ | ✅ | ✅ |
+| Use global search (read-only) | ✅ | ✅ | ✅ |
+| View Global Latest | ✅ | ✅ | ✅ |
+| Create sub-community | ❌ | ✅ | ✅ |
+| Edit sub-community metadata (own) | ❌ | ✅ (own) | ✅ (any) |
+| Delete sub-community | ❌ | ✅ (own) | ✅ (any) |
+| Join/Leave community | ❌ | ✅ | ✅ |
+| Create post (text-only) | ❌ | ✅ | ✅ |
+| Edit/Delete own post | ❌ | ✅ (own) | ✅ (any) |
+| Create comment | ❌ | ✅ | ✅ |
+| Edit/Delete own comment | ❌ | ✅ (own) | ✅ (any) |
+| Vote on post/comment | ❌ | ✅ (not own) | ✅ (not own) |
+| Toggle vote state (Upvote/Downvote/None) | ❌ | ✅ | ✅ |
+| View/manage own profile basics | ❌ | ✅ | ✅ |
+| Enforce policy and remove any content | ❌ | ❌ | ✅ |
+| Suspend/restore user accounts (business action) | ❌ | ❌ | ✅ |
+
+Notes
+- “(own)” denotes ownership by the acting account.
+- siteAdmin actions are limited to policy, safety, and legal needs, with audit logging.
+
+## 6. Guest Guard and Author Guard
+- Guest Guard
+  - WHEN an unauthenticated user attempts to post, comment, vote, create a community, or join/leave, THE platform SHALL prompt login with “Please sign in to continue.” and SHALL resume the original action upon success.
+- Author Guard
+  - WHEN a user attempts to edit or delete content they do not own, THE platform SHALL deny the action and present “You can edit or delete only items you authored.”
+
+## 7. Account States and Recovery
+
+### 7.1 Account States
+- Active: Full access according to role.
+- Suspended: Read-only; cannot create/edit/delete/vote/join/leave.
+- Closed (User-initiated): Account deactivated; login disabled; existing public content remains per policy.
+- Restricted (Temporary): Specific actions disabled due to abuse or policy violations.
+
+EARS
+- WHEN an account is suspended, THE platform SHALL restrict actions to read-only until restored by siteAdmin.
+- WHEN an account is closed by the user, THE platform SHALL disable subsequent logins and retain already public content per policy.
+- WHERE an account is restricted, THE platform SHALL block only the specified actions and present a clear message indicating restriction scope and duration, where applicable.
+
+### 7.2 Credential Recovery and Changes
+- WHEN a user initiates password recovery, THE platform SHALL provide a guided process to restore access.
+- WHEN a user changes a password, THE platform SHALL apply the change to future authentications and invalidate old credentials.
+- WHERE the user requests sign-out across devices, THE platform SHALL end active sessions while preserving account integrity and content.
+
+### 7.3 Session Expiry and Re-Login
+- WHEN a session expires during any action, THE platform SHALL prompt re-login and, upon success, SHALL resume the interrupted action from the same state.
+- WHILE re-authenticating, THE platform SHALL preserve form inputs and user selections.
+
+## 8. Abuse Prevention and Appeals (Business-Level)
+- THE platform SHALL deter spam, manipulation, and harassment via business-level controls such as reasonable rate limits and temporary restrictions (implementation is at development team discretion).
+- WHEN suspicious behavior is detected (e.g., rapid voting sequences, mass postings), THE platform SHALL throttle or temporarily restrict implicated actions and present a clear message.
+- IF abusive content is reported or confirmed, THEN THE platform SHALL allow siteAdmin to remove the content and apply account restrictions where appropriate.
+- WHERE a user is suspended or restricted, THE platform SHALL provide a channel for appeal and SHALL restore access if the appeal is approved.
+
+## 9. Diagrams (Mermaid)
+
+### 9.1 Guest Guard and Resume Flow
 ```mermaid
 graph LR
-  A["Guest Attempts Guarded Action"] --> B["Show 'Please sign in to continue.'"]
-  B --> C["Submit Credentials"]
-  C --> D{"Credentials Valid?"}
-  D -->|"Yes"| E["Create Session & Resume Original Action"]
-  D -->|"No"| F["Show 'Login failed. Please try again.'"]
-  E --> G["Action Completed With Original Input"]
+  A["Guest Attempts Restricted Action"] --> B["Show Login Prompt(Modal)"]
+  B --> C["User Authenticates"]
+  C --> D{"Success?"}
+  D -->|"Yes"| E["Resume Original Action"]
+  D -->|"No"| F["Show Retry Message"]
+  E --> G["Action Completed"]
 ```
 
-EARS:
-- WHEN a guestVisitor triggers a guarded action, THE communityPlatform SHALL show “Please sign in to continue.” and SHALL block the action until authentication succeeds.
-- WHEN authentication completes successfully, THE communityPlatform SHALL resume the exact original action using preserved input and context.
-- IF authentication fails, THEN THE communityPlatform SHALL show “Login failed. Please try again.” and keep the user on the same screen.
-
-## 4. Ownership and Authorship Rules
-### 4.1 Account-Based Ownership
-- THE communityPlatform SHALL attribute authorship of posts and comments to the authenticated account that created them.
-- THE communityPlatform SHALL attribute community ownership to the account that created the community.
-- THE communityPlatform SHALL treat “Author display name” as presentation-only; WHERE empty, THE communityPlatform SHALL display a default such as “Anonymous.”
-
-### 4.2 Edit/Delete Permissions
-- THE communityPlatform SHALL allow only the author of a post to edit or delete that post.
-- THE communityPlatform SHALL allow only the author of a comment to edit or delete that comment.
-- WHERE the user is the community owner, THE communityPlatform SHALL allow editing of description, logo, banner, rules, and category; the name is immutable.
-- WHEN a community is deleted by its owner or systemAdmin, THE communityPlatform SHALL remove all posts within that community from public access.
-
-### 4.3 Voting Restrictions
-- THE communityPlatform SHALL prevent users from voting on their own posts or comments.
-- WHEN a user interacts with vote controls, THE communityPlatform SHALL maintain a single state per item: None, Upvote, or Downvote, with direct toggling allowed and pressing the same state again reverting to None.
-
-EARS examples:
-- THE communityPlatform SHALL restrict edit/delete of a post to its author only.
-- THE communityPlatform SHALL restrict edit/delete of a comment to its author only.
-- THE communityPlatform SHALL prohibit self-votes on posts and comments.
-
-## 5. Permission Matrix Across Major Capabilities
-“Owner” indicates the authenticated creator of the respective resource (post/comment/community). “Community Owner” indicates the account that created the sub-community.
-
-| Action | guestVisitor | communityMember | systemAdmin |
-|--------|--------------|-----------------|-------------|
-| Read communities, posts, comments | ✅ | ✅ | ✅ |
-| Search posts/communities/comments | ✅ | ✅ | ✅ |
-| Join a community | ❌ | ✅ | ✅ (as user) |
-| Leave a community | ❌ | ✅ | ✅ (as user) |
-| Create a community | ❌ | ✅ | ✅ (as user) |
-| Edit community metadata/rules | ❌ | “Community Owner” only | Admin safeguards only |
-| Delete a community | ❌ | “Community Owner” only | ✅ (admin action) |
-| Create a post (text) | ❌ | ✅ | ✅ (as user) |
-| Edit own post | ❌ | “Owner” only | ❌ (no authorship override) |
-| Delete own post | ❌ | “Owner” only | ✅ (admin removal; not authorship) |
-| Comment on a post | ❌ | ✅ | ✅ (as user) |
-| Edit own comment | ❌ | “Owner” only | ❌ (no authorship override) |
-| Delete own comment | ❌ | “Owner” only | ✅ (admin removal; not authorship) |
-| Vote on posts/comments | ❌ | ✅ (no self-vote) | ✅ (no self-vote) |
-| Access Global Latest list | ✅ | ✅ | ✅ |
-| Use Global Post Composer | ❌ | ✅ | ✅ |
-| View Community Info + Rules | ✅ | ✅ | ✅ |
-
-Clarifications:
-- systemAdmin may act “as user” for normal content creation but does not receive special authorship; administrative removals are distinct from owner edits.
-- Posting does not require membership in the target community.
-
-EARS statements:
-- THE communityPlatform SHALL allow reading and searching to all roles.
-- THE communityPlatform SHALL require authentication for joining/leaving and all write actions.
-- WHERE the actor is not the content owner, THE communityPlatform SHALL deny edit/delete with the message “You can edit or delete only items you authored.”
-
-## 6. Join/Leave and Membership Display Rules
-### 6.1 Join/Leave Behavior
-- WHEN a user toggles join/leave on a community, THE communityPlatform SHALL immediately update the user’s membership state (optimistic) and later reconcile with the server.
-- WHEN joined, THE communityPlatform SHALL include the community’s posts in the user’s home feed; WHEN left, THE communityPlatform SHALL exclude them.
-- WHEN join/leave occurs, THE communityPlatform SHALL update the left sidebar Recent Communities list (up to 5 by most recent activity) immediately.
-- WHERE a user has not joined any community, THE communityPlatform SHALL show latest/top posts across all communities in the home feed and surface guidance to explore/join.
-
-### 6.2 Membership Count and Display
-- THE communityPlatform SHALL compute “Member Count” as the number of users who have joined a community.
-- WHILE the membership state is pending reconciliation, THE communityPlatform SHALL present the optimistic status and adjust feeds accordingly.
-
-EARS statements:
-- WHEN a community is joined, THE communityPlatform SHALL include its posts in the home feed and update “Recent Communities” immediately.
-- WHEN a community is left, THE communityPlatform SHALL exclude its posts from the home feed and update “Recent Communities” immediately.
-
-Mermaid flow (join/leave lifecycle):
+### 9.2 Voting State Transitions (Per Item)
 ```mermaid
 graph LR
-  A["User Clicks Join/Leave"] --> B["Optimistic Toggle State"]
-  B --> C["Update Home Feed Inclusion/Exclusion"]
-  C --> D["Update Recent Communities(Top 5)"]
-  B -.-> E{"Server Confirms?"}
-  E -->|"Yes"| F["Keep State"]
-  E -->|"No"| G["Revert State and Show 'A temporary error occurred. Please try again in a moment.'"]
+  S0["None"] -->|"Click Upvote"| S1["Upvote"]
+  S0 -->|"Click Downvote"| S2["Downvote"]
+  S1 -->|"Click Upvote Again"| S0
+  S2 -->|"Click Downvote Again"| S0
+  S1 -->|"Click Downvote"| S2
+  S2 -->|"Click Upvote"| S1
 ```
 
-## 7. Administrative Safeguards and Audit Expectations
-### 7.1 Administrative Powers
-- THE communityPlatform SHALL allow systemAdmin to perform emergency actions: disable or delete communities, and remove content that violates policy.
-- WHEN a community is disabled by systemAdmin, THE communityPlatform SHALL prevent new posts/comments and SHALL exclude the community’s posts from promotion surfaces while preserving data for review.
-- WHEN a community is deleted by systemAdmin, THE communityPlatform SHALL remove all posts within that community and SHALL mark the community as removed immediately.
-- WHEN inappropriate content is removed by systemAdmin, THE communityPlatform SHALL decrement related counters (e.g., comment counts) accordingly.
-
-### 7.2 Safeguards and Separation of Authorship
-- THE communityPlatform SHALL separate administrative removals from owner edits to preserve authorship semantics.
-- THE communityPlatform SHALL not attribute administrative edits/removals to the admin as author.
-
-### 7.3 Audit Expectations
-- THE communityPlatform SHALL record audit events for administrative actions, including: actor identity, action type, target resource, timestamp, and optional reason text.
-- THE communityPlatform SHALL retain audit records for at least 365 days.
-- WHEN an administrative action is executed, THE communityPlatform SHALL make the audit record available to authorized reviewers.
-
-EARS statements:
-- WHEN systemAdmin disables a community, THE communityPlatform SHALL block new posts/comments for that community and SHALL hide it from promotion surfaces while retaining data.
-- WHEN systemAdmin deletes a community, THE communityPlatform SHALL remove all posts within it and SHALL mark the community as removed immediately.
-- WHEN systemAdmin removes content, THE communityPlatform SHALL update counters and scores accordingly.
-- THE communityPlatform SHALL log administrative actions with actor, action, target, timestamp, and optional reason.
-
-## 8. Error Messages and Guard Behaviors
-Standard messages (verbatim) per product rules:
-- “Please sign in to continue.”
-- “You can edit or delete only items you authored.”
-- “This name is already in use.”
-- “This name isn’t available. Please choose something simpler.”
-- “Please choose a community to post in.”
-- “Please enter at least 2 characters.”
-- “You can’t vote on your own posts/comments.”
-- “A temporary error occurred. Please try again in a moment.”
-
-EARS statements:
-- WHEN permission checks fail, THE communityPlatform SHALL emit the corresponding standard message and SHALL not proceed with the restricted action.
-- WHEN temporary errors occur during guarded actions, THE communityPlatform SHALL allow retry and SHALL preserve user input for subsequent attempts.
-
-## 9. Non-Functional Expectations Related to Roles & Permissions
-- WHEN an authorization check is evaluated, THE communityPlatform SHALL return an allow/deny decision within 150 ms under normal load.
-- WHEN login or token refresh is required, THE communityPlatform SHALL complete the flow within the response time targets defined in Section 3.
-- WHILE optimistic UI is in effect for join/leave and voting, THE communityPlatform SHALL reconcile with server state and SHALL correct inconsistencies within 5 seconds of detection.
-- THE communityPlatform SHALL present timestamps in the user’s local timezone using relative formats (“just now,” “X minutes ago,” “X hours ago,” “X days ago”).
-- THE communityPlatform SHALL use number abbreviations such as 1.2k, 12.3k, 1.2m for large counters in contexts that display counts.
-
-## 10. Mermaid Diagrams
-### 10.1 Guest Guard and Resume
+### 9.3 Session Expiry and Re-Login
 ```mermaid
 graph LR
-  A["Trigger Guarded Action"] --> B{"Authenticated?"}
-  B -->|"Yes"| C["Proceed With Action"]
-  B -->|"No"| D["Prompt: 'Please sign in to continue.'"]
-  D --> E["Authenticate User"]
-  E --> F{"Success?"}
-  F -->|"Yes"| G["Resume Original Action"]
-  F -->|"No"| H["Show Retry-Friendly Message"]
+  A1["Action In Progress"] --> A2{"Session Valid?"}
+  A2 -->|"Yes"| A3["Proceed"]
+  A2 -->|"No"| A4["Prompt Re-Login"]
+  A4 --> A5["User Re-Authenticates"]
+  A5 --> A6{"Success?"}
+  A6 -->|"Yes"| A7["Resume Action With Preserved Input"]
+  A6 -->|"No"| A8["Remain On Screen With Retry"]
 ```
 
-### 10.2 Author Guard Enforcement
-```mermaid
-graph LR
-  A["User Initiates Edit/Delete"] --> B{"Is Author?"}
-  B -->|"Yes"| C["Proceed - Apply Change"]
-  B -->|"No"| D["Show 'You can edit or delete only items you authored.'"]
-```
+## 10. Assumptions, Constraints, and Non-Goals
 
-### 10.3 Join/Leave Lifecycle
-```mermaid
-graph LR
-  U["User (Authenticated)"] --> J{"Pressed 'Join'?"}
-  J -->|"Yes"| A1["Add to Joined Set"]
-  A1 --> B1["Update Home Feed Inclusion"]
-  B1 --> C1["Update Recent Communities"]
-  C1 --> D1["Set Button to 'Joined'"]
-  J -->|"No (Pressed 'Joined')"| L1["Remove from Joined Set"]
-  L1 --> M1["Update Home Feed Exclusion"]
-  M1 --> N1["Update Recent Communities"]
-  N1 --> O1["Set Button to 'Join'"]
-```
+### Assumptions
+- Public reading is permitted system-wide.
+- At least one siteAdmin exists for governance and policy enforcement.
+- Community deletion cascades to posts within that community.
+- Joining affects only personalization and does not grant moderation rights.
 
-## 11. Glossary
-- Authorship: Relationship between a user account and the content it created.
-- Community Owner: Account that created a sub-community; has exclusive rights to edit metadata and rules; name is immutable.
-- Guarded Action: Action requiring authentication (post/comment/edit/delete/vote/join/leave/create community).
-- Optimistic UI: Immediate client-side reflection of an action’s expected result prior to server confirmation, with subsequent reconciliation.
-- Promotion Surfaces: Feeds and lists where content is surfaced (e.g., home feed, explore grid, global latest sidebar).
+### Constraints
+- Business rules only; no API definitions, token formats, or data models.
+- Name immutability for communities after creation.
+- Minimal validation to keep flows smooth while preserving essential constraints.
 
-## 12. Traceability to Product Requirements
-- Open reading; guarded write actions: Sections 1–3.
-- Session longevity and smooth re-login: Sections 3 and 9.
-- Account-based ownership and author-only editing/deleting: Sections 4 and 5.
-- Join/leave effects and Recent Communities updates: Section 6.
-- Voting state and self-vote prevention: Sections 4 and 9 (non-functional) with cross-reference to platform rules.
-- Standard messages and input rules: Section 8.
+### Non-Goals
+- UI design, component layout, or styling specifications.
+- Technology stack or infrastructure decisions.
+- API endpoint enumeration or payload schemas.
 
-This specification provides business requirements only. All technical implementation decisions (architecture, APIs, database design, security controls) are at the discretion of the development team. 
+## 11. Acceptance Criteria and Test Scenarios (Business-Level)
+
+### 11.1 Authentication and Sessions
+- WHEN an unauthenticated user attempts to vote, THE platform SHALL prompt login and resume the vote upon success.
+- WHEN a session expires during post submission, THE platform SHALL prompt re-login and submit the post with previously entered content upon success.
+- WHILE a session is valid, THE platform SHALL not present re-login prompts.
+
+### 11.2 Sub-Communities
+- WHEN a registeredMember creates a community with a unique, valid name and a valid category, THE platform SHALL create it, set the creator as owner, and auto-join the creator.
+- WHEN the owner edits the community’s description, THE platform SHALL apply the change; non-owners SHALL be denied.
+- WHEN the owner deletes the community, THE platform SHALL remove the community and all posts within it; name remains available for reuse per policy.
+- WHEN any user joins a community, THE platform SHALL immediately include its posts in that user’s personalized home feed and update Recent Communities.
+
+### 11.3 Posts and Comments
+- WHEN a registeredMember submits a valid post to a target community, THE platform SHALL publish it.
+- IF a non-author attempts to edit or delete a post, THEN THE platform SHALL deny the action with “You can edit or delete only items you authored.”
+- WHEN a registeredMember creates a valid comment, THE platform SHALL publish it; non-authors SHALL be denied from modifying it.
+
+### 11.4 Voting
+- WHEN a registeredMember votes on another user’s post, THE platform SHALL set the vote state accordingly and update the score as (upvotes − downvotes).
+- IF a user attempts to vote on their own content, THEN THE platform SHALL deny the action and present “You can’t vote on your own posts/comments.”
+- WHEN a user toggles from Upvote to Downvote, THE platform SHALL reflect the direct switch; pressing the same vote again SHALL revert to None.
+
+### 11.5 Account States and Recovery
+- WHEN an account is Suspended, THE platform SHALL allow only read access and deny create/edit/delete/vote/join/leave actions with an explanatory message.
+- WHEN a user completes password recovery, THE platform SHALL enable login with the new credential and invalidate the old one.
+- WHEN a siteAdmin approves an appeal, THE platform SHALL restore the appropriate access level immediately.
+
+## 12. Related Documents
+- Roles and permissions interact with: User journeys, Sorting and Pagination, Sub-Communities, Posts, Comments, Voting, Search, Session & Auth Experience, and Standard Copy. Refer to the respective business requirements by those names for canonical rules.
+
+## 13. Business-Only Clarification
+Specifies business requirements and expected behaviors. All technical implementation details—including architecture, API design, data storage, and token formats—are the responsibility of the development team.
